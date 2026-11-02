@@ -23,9 +23,18 @@ log_path     = snakemake.log[0]
 
 sys.stderr = open(log_path, "w")
 
-w_gn = weights["genomad"]
-w_vs = weights["virsorter2"]
-w_pp = weights["pprmeta"]
+# Renormalize over the tools that actually contributed, so disabling one does
+# not depress every score by its weight.
+_present = {
+    "genomad": bool(snakemake.input.genomad),
+    "virsorter2": bool(snakemake.input.virsorter2),
+    "pprmeta": bool(snakemake.input.pprmeta),
+}
+_total = sum(weights[t] for t, on in _present.items() if on) or 1.0
+w_gn = weights["genomad"] / _total if _present["genomad"] else 0.0
+w_vs = weights["virsorter2"] / _total if _present["virsorter2"] else 0.0
+w_pp = weights["pprmeta"] / _total if _present["pprmeta"] else 0.0
+print(f"Tool weights (renormalized): genomad={w_gn:.3f} virsorter2={w_vs:.3f} pprmeta={w_pp:.3f}", file=sys.stderr)
 
 
 def load_genomad(path, sample):
@@ -71,9 +80,15 @@ genomad_dfs    = [load_genomad(p, s) for p, s in zip(snakemake.input.genomad,   
 virsorter2_dfs = [load_virsorter2(p, s) for p, s in zip(snakemake.input.virsorter2, samples)]
 pprmeta_dfs    = [load_pprmeta(p, s) for p, s in zip(snakemake.input.pprmeta,    samples)]
 
-gn = pd.concat(genomad_dfs,    ignore_index=True)
-vs = pd.concat(virsorter2_dfs, ignore_index=True)
-pp = pd.concat(pprmeta_dfs,    ignore_index=True)
+def _concat(dfs, score_col):
+    """Empty when a tool is disabled: its score column then stays absent."""
+    if not dfs:
+        return pd.DataFrame(columns=["contig_id", "sample", score_col])
+    return pd.concat(dfs, ignore_index=True)
+
+gn = _concat(genomad_dfs,    "genomad_score")
+vs = _concat(virsorter2_dfs, "virsorter2_score")
+pp = _concat(pprmeta_dfs,    "pprmeta_score")
 
 # Merge on contig_id + sample; outer join so contigs detected by any tool are kept
 merged = gn.merge(vs, on=["contig_id", "sample"], how="outer") \

@@ -6,11 +6,49 @@ min_contig_length: 1000
 # Minimum combined viral probability score to retain a contig
 viral_score_threshold: 0.5
 
-# Per-tool weights for evidence scoring (must sum to 1.0)
+# ── Virus identification tools ────────────────────────────────────────────────
+# Which detection tools run. PPR-Meta is off by default: it is phage/plasmid
+# oriented (a poor fit for a eukaryotic-virus focus) and pulls in TensorFlow.
+# VIBRANT stays enabled because the phage-exclusion rules depend on its calls.
+virus_identification:
+  tools:
+    genomad: true
+    virsorter2: true
+    vibrant: true
+    cenote_taker3: true
+    diamond_refseq_viral: true   # DIAMOND blastx vs RefSeq viral proteins
+    diamond_nr: true             # DIAMOND blastx vs NCBI nr (cellular false positives)
+    pprmeta: false
+
+  # geNomad / VirSorter2 / VIBRANT / Cenote-Taker3 are the slow steps. Splitting
+  # the contigs into chunks lets them run as parallel jobs. 1 = no splitting.
+  n_chunks: 1
+
+  virsorter2_min_score: 0.5      # parsing threshold for max_score -> called
+
+  diamond:
+    evalue: "1e-5"
+    max_target_seqs: 25
+    top_n_hits: 10               # hits considered for the majority-vote call
+    # Hits within this % of the contig's best bitscore qualify for the vote.
+    # TUNE (Jordan, high priority): placeholder pending real-data benchmarking.
+    bitscore_margin_pct: 70
+    sensitivity: "--sensitive"   # --fast | --sensitive | --very-sensitive
+    # nr is huge; restrict it to contigs already called by a Tier A tool.
+    nr_scope: candidates         # candidates | all
+
+  cenote_taker3:
+    # Hallmark domain categories: all three for broad eukaryotic-virus detection.
+    domains: "virion rdrp dnarep"
+    prune_prophage: true
+
+# Per-tool weights for the weighted viral_score. Renormalized over the enabled
+# tools that produce a usable score, so disabling one does not depress scores.
 tool_weights:
-  genomad: 0.34
-  virsorter2: 0.33
-  pprmeta: 0.33
+  genomad: 0.3
+  virsorter2: 0.3
+  vibrant: 0.2
+  pprmeta: 0.2
 
 # CoverM abundance metric
 coverm_metric: rpkm
@@ -29,14 +67,27 @@ genomad_db: databases/genomad_db
 # VirSorter2 database (virsorter setup --db-dir databases/virsorter2_db)
 virsorter2_db: databases/virsorter2_db
 
-# CheckV database (checkv download_database databases/checkv_db)
+# CheckV database. The downloader creates a NESTED versioned directory, so the
+# real path is databases/checkv_db/checkv-db-v1.5 (resolved by databases.smk).
 checkv_db: databases/checkv_db
+
+# VIBRANT needs TWO paths: the "databases" dir (-d) and its sibling "files" dir
+# (-m). Both live under this parent.
+vibrant_db: databases/vibrant_db
+
+# Cenote-Taker3 database directory (passed via --cenote-dbs)
+cenote_taker3_db: databases/cenote_taker3_db
 
 # NCBI taxdump directory (contains nodes.dmp and names.dmp)
 taxdump_dir: databases/taxdump
 
-# DIAMOND viral RefSeq database (built from NCBI viral RefSeq proteins)
-diamond_db: databases/diamond/nr_viral.dmnd
+# DIAMOND database of NCBI viral RefSeq proteins, taxonomy-enabled
+diamond_refseq_viral_db: databases/diamond/refseq_viral.dmnd
+
+# DIAMOND database of NCBI nr. ~300 GB built; NOT downloaded automatically
+# unless download_nr is true (see databases.smk).
+diamond_nr_db: databases/diamond/nr.dmnd
+download_nr: false
 
 # ── Read preprocessing ────────────────────────────────────────────────────────
 # Order inside the single qc_reads rule: fastp → host removal (opt) → dedup (opt).

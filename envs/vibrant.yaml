@@ -1,0 +1,9 @@
+name: vibrant
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python
+  - vibrant=1.2.1
+  - numpy<1.24          # VIBRANT breaks on numpy >= 1.24 (removed aliases)
+  - libtiff             # Pillow/matplotlib chain fix

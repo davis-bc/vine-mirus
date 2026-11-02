@@ -146,6 +146,16 @@ All parameters are in `config/config.yaml`. Key settings:
 | `assembly.assembler` | `megahit` | `megahit` or `metaspades` |
 | `assembly.min_contig_len` | `500` | Assembler minimum contig length |
 | `assembly.quast` | `true` | QUAST report per assembly (included in MultiQC) |
+| `virus_identification.tools.*` | see below | Enable/disable each detection tool |
+| `virus_identification.n_chunks` | `1` | Split contigs into N chunks so geNomad/VirSorter2/VIBRANT/Cenote-Taker3 run as parallel jobs |
+| `virus_identification.diamond.nr_scope` | `candidates` | Run DIAMOND vs nr on candidate contigs only (`candidates`) or all (`all`) |
+| `virus_identification.diamond.bitscore_margin_pct` | `70` | Hits within this % of the best bitscore join the majority-vote call (placeholder — needs real-data tuning) |
+
+**Detection tools** (`virus_identification.tools`): `genomad`, `virsorter2`, `vibrant`,
+`cenote_taker3`, `diamond_refseq_viral` and `diamond_nr` are on by default;
+`pprmeta` is off (phage/plasmid oriented, and it pulls in TensorFlow). VIBRANT
+should stay on if phage filtering matters: the high-confidence phage rules key
+on its calls.
 
 Database paths are automatically set to `databases/` and require no editing.
 

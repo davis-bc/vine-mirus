@@ -17,7 +17,7 @@ rule taxonomy_checkv:
         mem_mb=32000,
         runtime=120,
     params:
-        diamond_db=config["diamond_db"],
+        diamond_db=config["diamond_refseq_viral_db"],
         taxdump=config["taxdump_dir"],
         checkv_db=config["checkv_db"],
         evalue=config["diamond_evalue"],

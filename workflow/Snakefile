@@ -53,6 +53,8 @@ CONTIG_SETS = ASSEMBLY_UNITS + PROVIDED_SAMPLES
 
 wildcard_constraints:
     sample="[^/]+",
+    chunk="[0-9]+",
+    db="refseq_viral|nr",
     unit="[^/]+",
 
 
@@ -84,12 +86,48 @@ def get_contigs(wildcards):
     return get_contigs_path(wildcards.sample)
 
 
+# ── Virus identification ───────────────────────────────────────────────────────
+TEST_MODE = bool(config.get("test_mode", False))
+SCRIPTS = workflow.basedir + "/scripts"
+
+TOOLS = config["virus_identification"]["tools"]
+ENABLED_TOOLS = [t for t, on in TOOLS.items() if on]
+if not ENABLED_TOOLS:
+    raise ValueError("No tools enabled under virus_identification.tools")
+
+N_CHUNKS = int(config["virus_identification"]["n_chunks"])
+if N_CHUNKS < 1:
+    raise ValueError("virus_identification.n_chunks must be >= 1")
+CHUNKS = [f"{i:03d}" for i in range(1, N_CHUNKS + 1)]
+
+# Canonical per-tool output tables consumed by the evidence step.
+TOOL_TABLE = {
+    "genomad": "results/samples/{sample}/genomad/virus_summary.tsv",
+    "virsorter2": "results/samples/{sample}/virsorter2/final-viral-score.tsv",
+    "vibrant": "results/samples/{sample}/vibrant/genome_quality.tsv",
+    "cenote_taker3": "results/samples/{sample}/cenote_taker3/virus_summary.tsv",
+    "pprmeta": "results/samples/{sample}/pprmeta/pprmeta.csv",
+    "diamond_refseq_viral": "results/samples/{sample}/diamond_refseq_viral/hits.tsv",
+    "diamond_nr": "results/samples/{sample}/diamond_nr/hits.tsv",
+}
+
+def tool_tables(tool):
+    """Paths to one tool's table for every contig set (empty if disabled)."""
+    if not TOOLS.get(tool):
+        return []
+    return expand(TOOL_TABLE[tool], sample=CONTIG_SETS)
+
+
 include: "rules/databases.smk"
 include: "rules/preprocess.smk"
 include: "rules/assembly.smk"
 include: "rules/prep_contigs.smk"
+include: "rules/chunks.smk"
 include: "rules/genomad.smk"
 include: "rules/virsorter2.smk"
+include: "rules/vibrant.smk"
+include: "rules/cenote_taker3.smk"
+include: "rules/diamond.smk"
 include: "rules/pprmeta.smk"
 include: "rules/evidence_score.smk"
 include: "rules/taxonomy_checkv.smk"

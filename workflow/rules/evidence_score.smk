@@ -1,8 +1,13 @@
 rule evidence_score:
     input:
-        genomad=expand("results/samples/{sample}/genomad/{sample}_contigs_summary/{sample}_contigs_virus_summary.tsv", sample=CONTIG_SETS),
-        virsorter2=expand("results/samples/{sample}/virsorter2/final-viral-score.tsv", sample=CONTIG_SETS),
-        pprmeta=expand("results/samples/{sample}/pprmeta/{sample}_pprmeta.csv", sample=CONTIG_SETS),
+        genomad=tool_tables("genomad"),
+        virsorter2=tool_tables("virsorter2"),
+        pprmeta=tool_tables("pprmeta"),
+        # Consumed by the evidence rewrite; listed here so the tools run and
+        # their outputs are produced/validated.
+        vibrant=tool_tables("vibrant"),
+        cenote_taker3=tool_tables("cenote_taker3"),
+        diamond_refseq_viral=tool_tables("diamond_refseq_viral"),
     output:
         scores="results/intermediate/evidence/viral_scores.tsv",
     threads: 1
