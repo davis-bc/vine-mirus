@@ -96,7 +96,9 @@ sample1 /data/sample1_R1.fastq.gz       /data/sample1_R2.fastq.gz
 sample2 /data/sample2_R1.fastq.gz       /data/sample2_R2.fastq.gz
 ```
 
-Runs: fastp QC → MEGAHIT assembly → viral detection → taxonomy/CheckV → CoverM.
+Runs: QC (fastp → optional host removal → optional dedup) → normalization → co-assembly (or per-sample assembly) → viral detection → taxonomy/CheckV → CoverM.
+
+In `coassembly` mode, contig IDs are prefixed `coasm__`. In `per_sample` mode they are prefixed `{sample}__`.
 
 ### Option 2 — Pre-assembled contigs (viral detection only)
 
@@ -135,9 +137,15 @@ All parameters are in `config/config.yaml`. Key settings:
 | `tool_weights.pprmeta` | `0.33` | Weight for PPR-Meta score |
 | `coverm_metric` | `rpkm` | CoverM abundance metric (`rpkm`, `tpm`, `mean`) |
 | `test_mode` | `true` | Stub all tool calls with fast mocks (no databases needed) |
-| `megahit_min_contig_len` | `500` | MEGAHIT minimum contig length |
-| `fastp_min_length` | `50` | fastp minimum read length |
-| `fastp_qualified_quality` | `15` | fastp minimum base quality |
+| `preprocessing.fastp.min_length` | `50` | fastp minimum read length |
+| `preprocessing.fastp.qualified_quality` | `15` | fastp per-base quality threshold |
+| `preprocessing.host_removal.enabled` | `false` | Remove host reads (minimap2); set `reference_genomes`. Recommended for tissue samples |
+| `preprocessing.deduplication.enabled` | `false` | clumpify.sh read deduplication |
+| `preprocessing.normalization.enabled` | `true` | bbnorm before assembly (assembly only; abundance uses un-normalized reads) |
+| `assembly.mode` | `coassembly` | `coassembly` (pool all read samples, one assembly) or `per_sample` |
+| `assembly.assembler` | `megahit` | `megahit` or `metaspades` |
+| `assembly.min_contig_len` | `500` | Assembler minimum contig length |
+| `assembly.quast` | `true` | QUAST report per assembly (included in MultiQC) |
 
 Database paths are automatically set to `databases/` and require no editing.
 

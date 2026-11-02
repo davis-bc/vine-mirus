@@ -1,8 +1,8 @@
 rule evidence_score:
     input:
-        genomad=expand("results/samples/{sample}/genomad/{sample}_contigs_summary/{sample}_contigs_virus_summary.tsv", sample=SAMPLES),
-        virsorter2=expand("results/samples/{sample}/virsorter2/final-viral-score.tsv", sample=SAMPLES),
-        pprmeta=expand("results/samples/{sample}/pprmeta/{sample}_pprmeta.csv", sample=SAMPLES),
+        genomad=expand("results/samples/{sample}/genomad/{sample}_contigs_summary/{sample}_contigs_virus_summary.tsv", sample=CONTIG_SETS),
+        virsorter2=expand("results/samples/{sample}/virsorter2/final-viral-score.tsv", sample=CONTIG_SETS),
+        pprmeta=expand("results/samples/{sample}/pprmeta/{sample}_pprmeta.csv", sample=CONTIG_SETS),
     output:
         scores="results/intermediate/evidence/viral_scores.tsv",
     threads: 1
@@ -10,7 +10,7 @@ rule evidence_score:
         mem_mb=4000,
         runtime=30,
     params:
-        samples=SAMPLES,
+        samples=CONTIG_SETS,
         threshold=config["viral_score_threshold"],
         weights=config["tool_weights"],
     conda:

@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 test/data/*.fastq.gz
 .github/copilot-instructions.md
+hs_err_pid*.log

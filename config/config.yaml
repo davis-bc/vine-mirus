@@ -38,12 +38,37 @@ taxdump_dir: databases/taxdump
 # DIAMOND viral RefSeq database (built from NCBI viral RefSeq proteins)
 diamond_db: databases/diamond/nr_viral.dmnd
 
-# ── fastp ─────────────────────────────────────────────────────────────────────
-fastp_min_length: 50
-fastp_qualified_quality: 15
+# ── Read preprocessing ────────────────────────────────────────────────────────
+# Order inside the single qc_reads rule: fastp → host removal (opt) → dedup (opt).
+# Trimming runs first so host mapping only sees reads that survive QC.
+preprocessing:
+  fastp:
+    min_length: 50
+    qualified_quality: 15       # Jordan's pipeline used 30 (Q30); see README
+  host_removal:
+    # Strongly recommended for tissue samples (fish reads dominate, and removing
+    # them shrinks assembly + every downstream step). Off here only because it
+    # needs a user-supplied reference.
+    enabled: false
+    reference_genomes: []       # list of FASTA paths; concatenated and indexed once
+    # Keeps only pairs where BOTH mates are unmapped to host (samtools -f 12).
+    # Discordant pairs (one mate on host) are treated as host-derived.
+  deduplication:
+    enabled: false              # clumpify.sh dedupe=t
+  normalization:
+    enabled: true               # bbnorm; affects reads used for ASSEMBLY only.
+    target_depth: 50            # Abundance mapping always uses un-normalized reads.
+    min_depth: 0                # Jordan: benchmark against 2 on real data
 
-# ── MEGAHIT ───────────────────────────────────────────────────────────────────
-megahit_min_contig_len: 500   # pre-filter; viral tools re-filter at min_contig_length
+# ── Assembly ──────────────────────────────────────────────────────────────────
+assembly:
+  # coassembly : pool all read samples (without provided contigs), normalize
+  #              once, assemble once → contigs prefixed "coasm__"
+  # per_sample : assemble each sample separately → contigs prefixed "{sample}__"
+  mode: coassembly
+  assembler: megahit            # megahit | metaspades
+  min_contig_len: 500           # assembler pre-filter; viral tools gate at min_contig_length
+  quast: true                   # QUAST report on each assembly
 
 # ── VirSorter2 ────────────────────────────────────────────────────────────────
 virsorter2_groups:

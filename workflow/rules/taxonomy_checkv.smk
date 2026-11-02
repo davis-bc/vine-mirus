@@ -2,7 +2,7 @@ rule taxonomy_checkv:
     """Extract viral contigs, assign NCBI taxonomy via DIAMOND, assess completeness with CheckV."""
     input:
         scores="results/intermediate/evidence/viral_scores.tsv",
-        contigs=[get_contigs_path(s) for s in SAMPLES],
+        contigs=[get_contigs_path(s) for s in CONTIG_SETS],
         db=[] if config.get("test_mode") else [
             "databases/diamond/nr_viral.dmnd",
             "databases/taxdump/.done",

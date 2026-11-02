@@ -12,25 +12,48 @@ configfile: "config/config.yaml"
 samples_df = pd.read_csv(config.get("samples", "config/samples.tsv"), sep="\t", index_col="sample", dtype=str)
 SAMPLES = samples_df.index.tolist()
 
+COASM = "coasm"   # assembly-unit name (and contig-ID prefix) for the co-assembly
+
 # Sample names become contig-ID prefixes ("{sample}__k141_N"), so "__" and
 # whitespace would make sample_of_origin ambiguous. Fail at parse time.
-_bad = [s for s in SAMPLES if "__" in s or any(c.isspace() for c in s) or not s]
+_bad = [s for s in SAMPLES if "__" in s or any(c.isspace() for c in s) or not s or s == COASM]
 if _bad:
-    raise ValueError(f"Sample names must be non-empty, without whitespace or '__': {_bad}")
+    raise ValueError(f"Sample names must be non-empty, without whitespace or '__', and not '{COASM}': {_bad}")
 if len(set(SAMPLES)) != len(SAMPLES):
     raise ValueError("Duplicate sample names in the sample sheet")
 
-# Samples that need fastp QC (have reads)
-READS_SAMPLES = [
-    s for s in SAMPLES
-    if "r1" in samples_df.columns and pd.notna(samples_df.loc[s].get("r1", float("nan")))
-]
 
-# Samples that need de-novo assembly (have reads but no provided contigs)
-ASSEMBLE_SAMPLES = [
-    s for s in READS_SAMPLES
-    if not ("contigs" in samples_df.columns and pd.notna(samples_df.loc[s].get("contigs", float("nan"))))
-]
+def _has(sample, col):
+    return col in samples_df.columns and pd.notna(samples_df.loc[sample].get(col, float("nan")))
+
+# Samples with reads: QC'd, and used for abundance mapping
+READS_SAMPLES = [s for s in SAMPLES if _has(s, "r1")]
+
+# Samples whose contigs are supplied in the sheet (no assembly)
+PROVIDED_SAMPLES = [s for s in SAMPLES if _has(s, "contigs")]
+
+# Samples whose reads feed de-novo assembly (reads but no provided contigs)
+ASSEMBLE_SAMPLES = [s for s in READS_SAMPLES if s not in PROVIDED_SAMPLES]
+
+# ── Assembly units ─────────────────────────────────────────────────────────────
+# An "assembly unit" is one contig set that goes through viral ID. The {sample}
+# wildcard in per-unit rules (prep_contigs, genomad, ...) ranges over these.
+ASSEMBLY_MODE = config["assembly"]["mode"]
+if ASSEMBLY_MODE not in ("coassembly", "per_sample"):
+    raise ValueError(f"assembly.mode must be 'coassembly' or 'per_sample', got {ASSEMBLY_MODE!r}")
+if config["assembly"]["assembler"] not in ("megahit", "metaspades"):
+    raise ValueError(f"assembly.assembler must be 'megahit' or 'metaspades'")
+
+if ASSEMBLY_MODE == "coassembly":
+    ASSEMBLY_UNITS = [COASM] if ASSEMBLE_SAMPLES else []
+else:
+    ASSEMBLY_UNITS = list(ASSEMBLE_SAMPLES)
+
+CONTIG_SETS = ASSEMBLY_UNITS + PROVIDED_SAMPLES
+
+wildcard_constraints:
+    sample="[^/]+",
+    unit="[^/]+",
 
 
 def get_r1(wildcards):
@@ -39,11 +62,18 @@ def get_r1(wildcards):
 def get_r2(wildcards):
     return samples_df.loc[wildcards.sample, "r2"]
 
+def clean_reads(sample, mate):
+    """QC'd (and optionally host-removed / deduplicated) reads for one sample."""
+    return f"results/samples/{sample}/qc/{sample}_R{mate}.fastq.gz"
+
+def unit_samples(unit):
+    """Read samples that feed an assembly unit."""
+    return list(ASSEMBLE_SAMPLES) if unit == COASM else [unit]
+
 def get_raw_contigs(wildcards):
     """Assembled or user-provided contigs, before length gating / renaming."""
-    row = samples_df.loc[wildcards.sample]
-    if "contigs" in samples_df.columns and pd.notna(row.get("contigs", float("nan"))):
-        return str(row["contigs"])
+    if wildcards.sample in PROVIDED_SAMPLES:
+        return str(samples_df.loc[wildcards.sample, "contigs"])
     return f"results/samples/{wildcards.sample}/assembly/{wildcards.sample}_contigs.fa"
 
 def get_contigs_path(sample):
@@ -55,8 +85,8 @@ def get_contigs(wildcards):
 
 
 include: "rules/databases.smk"
-include: "rules/fastp.smk"
-include: "rules/megahit.smk"
+include: "rules/preprocess.smk"
+include: "rules/assembly.smk"
 include: "rules/prep_contigs.smk"
 include: "rules/genomad.smk"
 include: "rules/virsorter2.smk"
@@ -67,7 +97,13 @@ include: "rules/coverm.smk"
 include: "rules/summary.smk"
 
 
+def all_targets():
+    targets = ["results/viral_contigs_abundance.tsv", "results/viral_contigs.fa"]
+    if READS_SAMPLES:
+        targets.append("results/qc/multiqc_report.html")
+    return targets
+
+
 rule all:
     input:
-        "results/viral_contigs_abundance.tsv",
-        "results/viral_contigs.fa",
+        all_targets(),
