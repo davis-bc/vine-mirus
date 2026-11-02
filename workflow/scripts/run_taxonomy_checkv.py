@@ -33,13 +33,12 @@ Path(viral_fa).parent.mkdir(parents=True, exist_ok=True)
 contig_to_sample = {}
 with open(viral_fa, "w") as out_fa:
     for cp in snakemake.input.contigs:
-        # Works for both results/samples/{sample}/assembly/{sample}_contigs.fa
-        # and externally provided paths (use filename stem minus _contigs suffix)
-        stem = Path(cp).stem.replace("_contigs", "")
+        # prep_contigs writes canonical "{sample}__<id>" headers, so contig IDs
+        # are globally unique and the sample is the prefix.
         for rec in SeqIO.parse(cp, "fasta"):
             if rec.id in passing and len(rec.seq) >= params.min_len:
                 SeqIO.write(rec, out_fa, "fasta")
-                contig_to_sample[rec.id] = stem
+                contig_to_sample[rec.id] = rec.id.split("__", 1)[0]
 
 print(f"Extracted {len(contig_to_sample)} viral contigs to {viral_fa}")
 

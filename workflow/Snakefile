@@ -9,8 +9,16 @@ configfile: "config/config.yaml"
 #   sample | contigs            → viral detection only (no QC, assembly, or abundance)
 #   sample | r1 | r2 | contigs  → use provided contigs but still run QC for abundance
 
-samples_df = pd.read_csv(config.get("samples", "config/samples.tsv"), sep="\t", index_col="sample")
+samples_df = pd.read_csv(config.get("samples", "config/samples.tsv"), sep="\t", index_col="sample", dtype=str)
 SAMPLES = samples_df.index.tolist()
+
+# Sample names become contig-ID prefixes ("{sample}__k141_N"), so "__" and
+# whitespace would make sample_of_origin ambiguous. Fail at parse time.
+_bad = [s for s in SAMPLES if "__" in s or any(c.isspace() for c in s) or not s]
+if _bad:
+    raise ValueError(f"Sample names must be non-empty, without whitespace or '__': {_bad}")
+if len(set(SAMPLES)) != len(SAMPLES):
+    raise ValueError("Duplicate sample names in the sample sheet")
 
 # Samples that need fastp QC (have reads)
 READS_SAMPLES = [
@@ -31,12 +39,16 @@ def get_r1(wildcards):
 def get_r2(wildcards):
     return samples_df.loc[wildcards.sample, "r2"]
 
-def get_contigs_path(sample):
-    """Return the path to assembled/provided contigs for a sample."""
-    row = samples_df.loc[sample]
+def get_raw_contigs(wildcards):
+    """Assembled or user-provided contigs, before length gating / renaming."""
+    row = samples_df.loc[wildcards.sample]
     if "contigs" in samples_df.columns and pd.notna(row.get("contigs", float("nan"))):
         return str(row["contigs"])
-    return f"results/samples/{sample}/assembly/{sample}_contigs.fa"
+    return f"results/samples/{wildcards.sample}/assembly/{wildcards.sample}_contigs.fa"
+
+def get_contigs_path(sample):
+    """Length-gated contigs with canonical '{sample}__<id>' headers (prep_contigs)."""
+    return f"results/samples/{sample}/contigs/{sample}_contigs.fa"
 
 def get_contigs(wildcards):
     return get_contigs_path(wildcards.sample)
@@ -45,6 +57,7 @@ def get_contigs(wildcards):
 include: "rules/databases.smk"
 include: "rules/fastp.smk"
 include: "rules/megahit.smk"
+include: "rules/prep_contigs.smk"
 include: "rules/genomad.smk"
 include: "rules/virsorter2.smk"
 include: "rules/pprmeta.smk"

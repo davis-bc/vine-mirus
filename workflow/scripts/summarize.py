@@ -53,8 +53,11 @@ meta_cols   = ["contig_id", "sample_of_origin", "length", "viral_score", "taxono
 sample_cols = [c for c in df.columns if c not in meta_cols]
 df = df[meta_cols + sample_cols]
 
-# Deduplicate (contig_id × sample_of_origin is the natural key)
-df = df.drop_duplicates(subset=["contig_id", "sample_of_origin"])
+# contig_id is globally unique ("{sample}__<id>", see prep_contigs.py), so a
+# duplicate here means a join fanned out. Fail instead of silently dropping rows.
+dups = df["contig_id"].duplicated(keep=False)
+if dups.any():
+    raise ValueError(f"Duplicate contig_id rows after merge: {df.loc[dups, 'contig_id'].unique()[:10].tolist()}")
 
 Path(out_path).parent.mkdir(parents=True, exist_ok=True)
 df.to_csv(out_path, sep="\t", index=False)
