@@ -85,8 +85,40 @@ tool_weights:
   vibrant: 0.2
   pprmeta: 0.2
 
-# CoverM abundance metric
-coverm_metric: rpkm
+# ── vOTU clustering ───────────────────────────────────────────────────────────
+# Dereplicates the viral contigs into viral operational taxonomic units, then
+# measures abundance against one representative per cluster so a single virus
+# population's reads are not split across near-identical contigs.
+#
+# Thresholds are the community convention (95% ANI over 85% of the shorter
+# sequence; Gregory et al. Global Ocean Virome, and the method CheckV's
+# anicalc.py/aniclust.py implement). The clustering runs AFTER phage exclusion.
+#
+# Jordan's note, still open: on a good co-assembly most redundancy is already
+# resolved, so this step may return mostly singletons. The singleton fraction
+# in logs/votu_cluster.log is the diagnostic - check it rather than assuming.
+votu_clustering:
+  enabled: true
+  ani_threshold: 95               # % identity, length-weighted over all HSPs
+  target_coverage_threshold: 85   # % of the absorbed contig covered by the rep
+  # All three thresholds must be met. 0 means "no query-coverage requirement",
+  # which is aniclust's default: a short contig may be absorbed by a much
+  # longer representative that it only covers a small part of.
+  query_coverage_threshold: 0
+  blastn_evalue: "1e-10"          # strict: this is a same-dataset self-comparison
+  blastn_task: megablast          # highly similar sequences; much faster than blastn
+  max_target_seqs: 10000          # the default 500 would truncate neighbour lists
+
+# ── Abundance ─────────────────────────────────────────────────────────────────
+# TPM is primary: it corrects for both contig length and sequencing depth, so
+# it compares across samples better than RPKM. The extra metrics are written to
+# results/intermediate/abundance/abundance_all_metrics.tsv for review.
+abundance:
+  primary_metric: tpm            # tpm | rpkm | mean | count | covered_fraction
+  additional_metrics:
+    - rpkm
+    - mean
+    - covered_fraction
 
 # Test mode: when true, viral prediction tools produce mock outputs instead of
 # running the real tools. Used for end-to-end pipeline logic testing without databases.

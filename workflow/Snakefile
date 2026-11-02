@@ -111,6 +111,16 @@ TOOL_TABLE = {
     "diamond_nr": "results/samples/{sample}/diamond_nr/hits.tsv",
 }
 
+# ── vOTU clustering and abundance ──────────────────────────────────────────────
+VOTU_CFG = config["votu_clustering"]
+VOTU = bool(VOTU_CFG["enabled"])
+
+PRIMARY_METRIC = config["abundance"]["primary_metric"]
+# Primary first so run_coverm.py can report it without re-reading the config.
+ABUNDANCE_METRICS = [PRIMARY_METRIC] + [m for m in config["abundance"]["additional_metrics"]
+                                        if m != PRIMARY_METRIC]
+
+
 def tool_tables(tool):
     """Paths to one tool's table for every contig set (empty if disabled)."""
     if not TOOLS.get(tool):
@@ -132,14 +142,18 @@ include: "rules/pprmeta.smk"
 include: "rules/evidence_score.smk"
 include: "rules/checkv.smk"
 include: "rules/evidence_final.smk"
+include: "rules/votu.smk"
 include: "rules/coverm.smk"
 include: "rules/summary.smk"
 
 
 def all_targets():
     targets = ["results/viral_contigs_abundance.tsv", "results/viral_contigs.fa"]
+    if VOTU:
+        targets.append("results/intermediate/votu/votu_representatives.fa")
     if READS_SAMPLES:
-        targets.append("results/qc/multiqc_report.html")
+        targets += ["results/qc/multiqc_report.html",
+                    "results/intermediate/abundance/abundance_all_metrics.tsv"]
     return targets
 
 

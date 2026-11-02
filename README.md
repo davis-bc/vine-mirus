@@ -20,19 +20,26 @@ fastp (QC)  ──►  MEGAHIT (assembly)
                         │
           ┌─────────────┼─────────────┐
           ▼             ▼             ▼
-       geNomad      VirSorter2    PPR-Meta
-          └─────────────┼─────────────┘
+   geNomad  VirSorter2  VIBRANT  Cenote-Taker3  DIAMOND/RefSeq  [PPR-Meta]
+          └─────────────┴──────┬──────┴───────────────┘
                         ▼
-               evidence_score  ←  weighted fusion
+               evidence_score  ←  Tier A: union + weighted score + tiers
+                        │                 → candidates.fa
+                        ▼
+          DIAMOND vs nr  +  CheckV  ←  Tier B: candidates only
                         │
                         ▼
-            taxonomy_checkv  ←  DIAMOND + NCBI taxdump + CheckV
+               evidence_final  ←  taxonomy, host domain, phage rules
                         │
                         ▼
-                     CoverM  ←  read-level abundance per contig
+                      vOTU  ←  95% ANI / 85% AF → representatives
+                        │
+                        ▼
+                     CoverM  ←  minimap2-sr → TPM per vOTU per sample
                         │
                         ▼
           results/viral_contigs_abundance.tsv
+          results/evidence_table.tsv
           results/viral_contigs.fa
 ```
 
@@ -135,7 +142,11 @@ All parameters are in `config/config.yaml`. Key settings:
 | `tool_weights.genomad` | `0.34` | Weight for geNomad score |
 | `tool_weights.virsorter2` | `0.33` | Weight for VirSorter2 score |
 | `tool_weights.pprmeta` | `0.33` | Weight for PPR-Meta score |
-| `coverm_metric` | `rpkm` | CoverM abundance metric (`rpkm`, `tpm`, `mean`) |
+| `abundance.primary_metric` | `tpm` | Primary abundance metric (`tpm`, `rpkm`, `mean`, `count`, `covered_fraction`) |
+| `abundance.additional_metrics` | `[rpkm, mean, covered_fraction]` | Also computed, into `abundance_all_metrics.tsv` |
+| `votu_clustering.enabled` | `true` | Dereplicate viral contigs into vOTUs and measure abundance on representatives |
+| `votu_clustering.ani_threshold` | `95` | % identity for same-vOTU membership |
+| `votu_clustering.target_coverage_threshold` | `85` | % of the absorbed contig the representative must cover |
 | `test_mode` | `true` | Stub all tool calls with fast mocks (no databases needed) |
 | `preprocessing.fastp.min_length` | `50` | fastp minimum read length |
 | `preprocessing.fastp.qualified_quality` | `15` | fastp per-base quality threshold |
@@ -246,7 +257,7 @@ snakemake --snakefile workflow/Snakefile \
 | `results/evidence_table.tsv` | **Reviewer table**: every contig screened, with each tool's call/score, the weighted `viral_score`, confidence tier, taxonomy, host domain, CheckV quality, and empty `reviewer_decision` / `reviewer_notes` columns |
 | `results/phage_evidence_table.tsv` | High-confidence phage, same columns, for independent review |
 | `results/viral_contigs.fa` | Candidate viral contigs (phage excluded unless `include_phage`) |
-| `results/viral_contigs_abundance.tsv` | Per-contig summary with one abundance column per sample |
+| `results/viral_contigs_abundance.tsv` | Per-contig summary with vOTU membership and one abundance column per sample |
 | `results/qc/multiqc_report.html` | fastp + QUAST report |
 
 **Evidence columns worth knowing:**
@@ -277,6 +288,33 @@ failures that return exit code 0 — three of six parsers in the original
 pipeline matched nothing for exactly this reason. Set
 `collation.strict_checks: false` to downgrade them to warnings.
 
+### vOTU clustering and abundance
+
+Viral contigs are dereplicated into **vOTUs** (viral operational taxonomic
+units) at 95% ANI over 85% of the shorter sequence — the community convention,
+and the method CheckV's `anicalc.py` / `aniclust.py` implement. Those scripts
+live in the CheckV *repository*, not in the bioconda `checkv` package, so
+`workflow/scripts/votu_cluster.py` implements the same method rather than
+shelling out to something the conda env does not contain.
+
+Clustering runs on `results/viral_contigs.fa`, i.e. **after** phage exclusion,
+so no cluster can be orphaned by its representative being filtered out later.
+CoverM then maps each sample's QC'd reads (never the bbnorm-normalized ones)
+against the **representatives only**, with `--mapper minimap2-sr`. This keeps
+one virus population's reads from being split across near-identical contigs,
+and shrinks the mapping reference.
+
+Abundance is therefore **per vOTU**: every member row in the summary reports
+its cluster's abundance, and `is_votu_representative` marks the contig that
+carried the mapping. Set `votu_clustering.enabled: false` for strictly
+per-contig abundance.
+
+`logs/votu_cluster.log` reports the singleton fraction and how much the set
+collapsed. On a good co-assembly most redundancy is already resolved, so a high
+singleton fraction is expected rather than a problem — but zero between-contig
+alignments is also what an ID mismatch looks like, so the log says so
+explicitly when that happens.
+
 ### Intermediate outputs
 
 ```
@@ -289,7 +327,9 @@ results/
 └── intermediate/
     ├── evidence/            ← evidence_tierA.tsv, candidates.fa
     ├── checkv/              ← quality_summary.tsv
-    └── abundance/           ← CoverM matrix
+    ├── votu/                ← votu_clusters.tsv, votu_representatives.fa
+    └── abundance/           ← abundance_matrix.tsv (primary metric),
+                               abundance_all_metrics.tsv (every metric)
 ```
 
 ## Test Mode
