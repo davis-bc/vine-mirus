@@ -24,7 +24,12 @@ virus_identification:
   # the contigs into chunks lets them run as parallel jobs. 1 = no splitting.
   n_chunks: 1
 
-  virsorter2_min_score: 0.5      # parsing threshold for max_score -> called
+  # Per-tool thresholds applied when PARSING output into a "called" boolean.
+  # geNomad is run with --min-score 0.0 so a score exists for every contig,
+  # which means presence in its summary is not itself a call.
+  genomad_min_score: 0.7
+  virsorter2_min_score: 0.5
+  pprmeta_min_score: 0.5
 
   diamond:
     evalue: "1e-5"
@@ -42,8 +47,38 @@ virus_identification:
     domains: "virion rdrp dnarep"
     prune_prophage: true
 
+# ── Evidence collation ────────────────────────────────────────────────────────
+collation:
+  # How a contig becomes a candidate:
+  #   union  - any tool called it (high recall; Jordan's Program 1 behaviour)
+  #   score  - weighted viral_score >= viral_score_threshold
+  #   both   - must satisfy both
+  # viral_score and the tier are always reported either way, so reviewers can
+  # sort regardless of which rule selects.
+  candidate_rule: union
+
+  # Review priority only - tiers never filter anything.
+  confidence_tiers:
+    tier_1_min_tools: 4
+    tier_2_min_tools: 2
+    tier_3_min_tools: 1
+
+  # Jordan's lesson: a clean exit code is not proof of success. After parsing,
+  # fail if an enabled tool matched zero contigs or a column is entirely
+  # constant (the signature of an ID-format or taxonomy-mapping break).
+  strict_checks: true
+
+phage_filtering:
+  # Default off: this project targets eukaryotic viruses. High-confidence phage
+  # is written to a separate table for independent review either way.
+  include_phage: false
+  # Rules (Jordan): A = VIBRANT called AND majority host domain prokaryote;
+  #                 B = VIBRANT is the only tool that called it.
+
 # Per-tool weights for the weighted viral_score. Renormalized over the enabled
 # tools that produce a usable score, so disabling one does not depress scores.
+# Cenote-Taker3 and the DIAMOND searches contribute presence/absence calls, not
+# scores, so they affect n_tools_called and the tier but carry no weight here.
 tool_weights:
   genomad: 0.3
   virsorter2: 0.3

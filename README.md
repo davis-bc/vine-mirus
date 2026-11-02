@@ -243,44 +243,54 @@ snakemake --snakefile workflow/Snakefile \
 
 | File | Description |
 |------|-------------|
-| `results/viral_contigs_abundance.tsv` | Main output: viral contigs with taxonomy, completeness, and per-sample RPKM |
-| `results/viral_contigs.fa` | FASTA of all viral contigs passing the evidence threshold |
+| `results/evidence_table.tsv` | **Reviewer table**: every contig screened, with each tool's call/score, the weighted `viral_score`, confidence tier, taxonomy, host domain, CheckV quality, and empty `reviewer_decision` / `reviewer_notes` columns |
+| `results/phage_evidence_table.tsv` | High-confidence phage, same columns, for independent review |
+| `results/viral_contigs.fa` | Candidate viral contigs (phage excluded unless `include_phage`) |
+| `results/viral_contigs_abundance.tsv` | Per-contig summary with one abundance column per sample |
+| `results/qc/multiqc_report.html` | fastp + QUAST report |
 
-**`viral_contigs_abundance.tsv` columns:**
+**Evidence columns worth knowing:**
 
-| Column | Description |
-|--------|-------------|
-| `contig_id` | Contig identifier from assembly |
-| `sample_of_origin` | Sample in which the contig was assembled |
-| `length` | Contig length (bp) |
-| `viral_score` | Weighted evidence score (0–1) |
-| `taxonomy` | NCBI lineage: `superkingdom;phylum;class;order;family;genus;species` |
-| `checkv_quality` | CheckV completeness: Complete / High-quality / Medium-quality / Low-quality / Not-determined |
-| `<sample> RPKM` | One column per sample: reads per kilobase per million mapped reads |
+| Column | Meaning |
+|--------|---------|
+| `n_tools_called` / `n_tools_evaluated` | How many tools called this contig, out of how many ran |
+| `viral_score` | Weighted mean of the tools that report a probability (geNomad, VirSorter2, VIBRANT, PPR-Meta), renormalized over the enabled ones. Cenote-Taker3 and the DIAMOND searches contribute calls, not scores |
+| `confidence_tier` | 1/2/3 by tool agreement — **review priority only, never a filter** |
+| `is_candidate` | Per `collation.candidate_rule` (`union` by default) |
+| `taxonomy` / `taxonomy_source` | Lineage, and which tool it came from (geNomad → Cenote-Taker3 → DIAMOND) |
+| `host_domain` | `prokaryote` / `eukaryote` / `unknown`, from lineage-clade lookup; unknown is retained |
+| `cellular_hit_fraction` | Share of qualifying nr hits that look cellular. High values on a called contig flag the classic cellular false positive — reported, never auto-filtered |
+| `high_confidence_phage`, `phage_rule_triggered` | Rule A (VIBRANT + prokaryote taxonomy) or Rule B (VIBRANT the only caller) |
+
+### Two-tier design
+
+Tier A runs the detection tools on every contig. Tier B (DIAMOND vs nr, CheckV)
+runs only on the candidates Tier A produced, which is where most of the runtime
+saving comes from. High-confidence phage is excluded from the candidate FASTA
+before Tier B (unless `include_phage`), so the expensive searches skip it.
+
+### Sanity checks
+
+After parsing, the evidence step fails when an enabled tool matched **zero**
+contig IDs, or when a call/score column is entirely constant. Both are silent
+failures that return exit code 0 — three of six parsers in the original
+pipeline matched nothing for exactly this reason. Set
+`collation.strict_checks: false` to downgrade them to warnings.
 
 ### Intermediate outputs
 
-All intermediate files are nested under `results/` to keep the root uncluttered:
-
 ```
 results/
-├── viral_contigs_abundance.tsv       ← terminal
-├── viral_contigs.fa                  ← terminal
-├── samples/
-│   └── {sample}/
-│       ├── qc/                       ← fastp trimmed reads + reports
-│       ├── assembly/                 ← MEGAHIT contigs
-│       ├── genomad/                  ← geNomad virus summary
-│       ├── virsorter2/               ← VirSorter2 scores
-│       └── pprmeta/                  ← PPR-Meta predictions
+├── samples/{sample|coasm}/
+│   ├── qc/                  ← fastp output (also used for abundance mapping)
+│   ├── assembly/            ← assembler output + QUAST
+│   ├── contigs/             ← length-gated, canonically renamed contigs
+│   └── <tool>/              ← per-tool output (+ chunks/ when scattered)
 └── intermediate/
-    ├── evidence/viral_scores.tsv     ← fused per-contig scores
-    ├── taxonomy/viral_taxonomy.tsv   ← DIAMOND taxonomy hits
-    ├── checkv/quality_summary.tsv    ← CheckV completeness
-    └── abundance/abundance_matrix.tsv ← CoverM raw matrix
+    ├── evidence/            ← evidence_tierA.tsv, candidates.fa
+    ├── checkv/              ← quality_summary.tsv
+    └── abundance/           ← CoverM matrix
 ```
-
----
 
 ## Test Mode
 

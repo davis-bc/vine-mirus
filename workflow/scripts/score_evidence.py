@@ -1,117 +1,189 @@
 """
-score_evidence.py — fuse viral predictions from geNomad, VirSorter2, and PPR-Meta
-into a single probability score per contig. Called as a Snakemake script.
+score_evidence.py — Tier A evidence: parse every enabled detection tool into one
+per-contig table, combine the evidence, and write the candidate FASTA that the
+expensive Tier B steps (DIAMOND vs nr, CheckV) then run on.
 
-Inputs  (snakemake.input):
-  genomad   : list of geNomad virus_summary.tsv paths (one per sample)
-  virsorter2: list of VirSorter2 final-viral-score.tsv paths (one per sample)
-  pprmeta   : list of PPR-Meta CSV output paths (one per sample)
+Combines two approaches:
+  - Jordan's union collation: a contig is a candidate if ANY tool called it,
+    with confidence tiers for review priority (they never filter).
+  - vine-mirus weighted scoring: a viral_score from the tools that report a
+    probability, so reviewers can rank within a tier.
 
-Output (snakemake.output.scores):
-  TSV with columns: contig_id, sample, genomad_score, virsorter2_score,
-                    pprmeta_score, viral_score, PASS
+Called as a Snakemake script.
 """
 
 import sys
-import pandas as pd
 from pathlib import Path
 
-samples      = snakemake.params.samples
-threshold    = snakemake.params.threshold
-weights      = snakemake.params.weights
-log_path     = snakemake.log[0]
+sys.path.insert(0, snakemake.params.scripts)
+import evidence_lib as ev   # noqa: E402
 
-sys.stderr = open(log_path, "w")
+log = open(snakemake.log[0], "w")
+sys.stdout = log
+sys.stderr = log
 
-# Renormalize over the tools that actually contributed, so disabling one does
-# not depress every score by its weight.
-_present = {
-    "genomad": bool(snakemake.input.genomad),
-    "virsorter2": bool(snakemake.input.virsorter2),
-    "pprmeta": bool(snakemake.input.pprmeta),
-}
-_total = sum(weights[t] for t, on in _present.items() if on) or 1.0
-w_gn = weights["genomad"] / _total if _present["genomad"] else 0.0
-w_vs = weights["virsorter2"] / _total if _present["virsorter2"] else 0.0
-w_pp = weights["pprmeta"] / _total if _present["pprmeta"] else 0.0
-print(f"Tool weights (renormalized): genomad={w_gn:.3f} virsorter2={w_vs:.3f} pprmeta={w_pp:.3f}", file=sys.stderr)
+params = snakemake.params
+tools = params.tools                  # {tool: enabled}
+thresholds = params.thresholds
+weights = params.weights
+collation = params.collation
+include_phage = bool(params.include_phage)
+strict = bool(collation["strict_checks"])
 
+# ── Contigs ───────────────────────────────────────────────────────────────────
+lengths = {}
+for path in snakemake.input.contigs:
+    lengths.update(ev.load_contigs(path))
+known = set(lengths)
+print(f"Contig sets: {len(snakemake.input.contigs)}; contigs: {len(known)}")
+if not known:
+    raise SystemExit("No contigs found in the contig sets")
 
-def load_genomad(path, sample):
-    try:
-        df = pd.read_csv(path, sep="\t")
-        # geNomad column is 'virus_score' or 'score'
-        score_col = "virus_score" if "virus_score" in df.columns else "score"
-        df = df[["seq_name", score_col]].rename(columns={"seq_name": "contig_id", score_col: "genomad_score"})
-        df["sample"] = sample
-        return df
-    except Exception as e:
-        print(f"WARNING: could not parse geNomad output for {sample}: {e}", file=sys.stderr)
-        return pd.DataFrame(columns=["contig_id", "sample", "genomad_score"])
+# ── Parse each enabled tool ───────────────────────────────────────────────────
+# In test mode there is no taxdump, so viral-ness of a DIAMOND hit comes from
+# the sskingdoms column. With real databases evidence_final re-derives host
+# domain from the taxdump; the call here only needs viral vs not.
+def _is_viral(taxids, kingdom):
+    return (kingdom or "").strip().lower().startswith("virus")
 
+dmd = params.diamond
+results = {}
 
-def load_virsorter2(path, sample):
-    try:
-        df = pd.read_csv(path, sep="\t")
-        # strip VS2 suffix (||full, ||partial, etc.)
-        df["contig_id"] = df["seqname"].str.replace(r"\|\|.*$", "", regex=True)
-        df = df[["contig_id", "max_score"]].rename(columns={"max_score": "virsorter2_score"})
-        df["sample"] = sample
-        return df
-    except Exception as e:
-        print(f"WARNING: could not parse VirSorter2 output for {sample}: {e}", file=sys.stderr)
-        return pd.DataFrame(columns=["contig_id", "sample", "virsorter2_score"])
+def _collect(tool, paths, parser):
+    if not tools.get(tool):
+        return
+    merged = {}
+    for path in paths:
+        merged.update(parser(path))
+    results[tool] = merged
 
+_collect("genomad", snakemake.input.genomad,
+         lambda p: ev.parse_genomad(p, thresholds["genomad_min_score"]))
+_collect("virsorter2", snakemake.input.virsorter2,
+         lambda p: ev.parse_virsorter2(p, thresholds["virsorter2_min_score"]))
+_collect("vibrant", snakemake.input.vibrant, ev.parse_vibrant)
+_collect("cenote_taker3", snakemake.input.cenote_taker3, ev.parse_cenote_taker3)
+_collect("pprmeta", snakemake.input.pprmeta,
+         lambda p: ev.parse_pprmeta(p, thresholds["pprmeta_min_score"]))
+_collect("diamond_refseq_viral", snakemake.input.diamond_refseq_viral,
+         lambda p: ev.parse_diamond_hits(p, dmd["top_n_hits"],
+                                         dmd["bitscore_margin_pct"], _is_viral))
 
-def load_pprmeta(path, sample):
-    try:
-        df = pd.read_csv(path)
-        # PPR-Meta columns: Header, Phage_score, Chromosome_score, Plasmid_score, Possible_source
-        df["contig_id"] = df["Header"].str.split(r"\s+").str[0]
-        df = df[["contig_id", "Phage_score"]].rename(columns={"Phage_score": "pprmeta_score"})
-        df["sample"] = sample
-        return df
-    except Exception as e:
-        print(f"WARNING: could not parse PPR-Meta output for {sample}: {e}", file=sys.stderr)
-        return pd.DataFrame(columns=["contig_id", "sample", "pprmeta_score"])
+print("\nParsed tool output (rows / matched to contig IDs):")
+ev.check_tool_matches(results, known, strict)
 
+# ── Weighted score ────────────────────────────────────────────────────────────
+# Only tools that report a probability carry weight. Absence from a tool's
+# output is a negative call (score 0), not missing data: every enabled tool saw
+# every contig, because prep_contigs applied the length gate before they ran.
+scoring_tools = [t for t in ("genomad", "virsorter2", "vibrant", "pprmeta") if t in results]
+weight_sum = sum(weights[t] for t in scoring_tools)
+if not scoring_tools:
+    print("[WARN] no score-producing tool enabled; viral_score will be 0 for every contig")
+norm_weights = {t: weights[t] / weight_sum for t in scoring_tools} if weight_sum else {}
+print("\nScore weights (renormalized over enabled scoring tools): "
+      + ", ".join(f"{t}={w:.3f}" for t, w in norm_weights.items()))
 
-genomad_dfs    = [load_genomad(p, s) for p, s in zip(snakemake.input.genomad,    samples)]
-virsorter2_dfs = [load_virsorter2(p, s) for p, s in zip(snakemake.input.virsorter2, samples)]
-pprmeta_dfs    = [load_pprmeta(p, s) for p, s in zip(snakemake.input.pprmeta,    samples)]
+tier_cfg = collation["confidence_tiers"]
+rule = collation["candidate_rule"]
+if rule not in ("union", "score", "both"):
+    raise SystemExit(f"collation.candidate_rule must be union|score|both, got {rule!r}")
+threshold = float(params.threshold)
 
-def _concat(dfs, score_col):
-    """Empty when a tool is disabled: its score column then stays absent."""
-    if not dfs:
-        return pd.DataFrame(columns=["contig_id", "sample", score_col])
-    return pd.concat(dfs, ignore_index=True)
+rows = []
+for contig, length in lengths.items():
+    row = {
+        "contig_id": contig,
+        "sample_of_origin": ev.sample_of(contig),
+        "length": length,
+    }
+    lineages = []
+    n_called = 0
+    score = 0.0
+    for tool, res in results.items():
+        entry = res.get(contig)
+        called = bool(entry and entry.get("called"))
+        row[f"{tool}_called"] = called
+        row[f"{tool}_score"] = entry.get("score") if entry else None
+        n_called += int(called)
+        if entry and entry.get("lineage"):
+            lineages.append(entry["lineage"])
+        if tool in norm_weights:
+            tool_score = (entry or {}).get("score")
+            score += norm_weights[tool] * (tool_score if tool_score is not None else 0.0)
 
-gn = _concat(genomad_dfs,    "genomad_score")
-vs = _concat(virsorter2_dfs, "virsorter2_score")
-pp = _concat(pprmeta_dfs,    "pprmeta_score")
+    row["n_tools_called"] = n_called
+    row["n_tools_evaluated"] = len(results)
+    row["viral_score"] = round(score, 4)
 
-# Merge on contig_id + sample; outer join so contigs detected by any tool are kept
-merged = gn.merge(vs, on=["contig_id", "sample"], how="outer") \
-           .merge(pp, on=["contig_id", "sample"], how="outer")
+    # Tiers are review priority only.
+    if n_called >= tier_cfg["tier_1_min_tools"]:
+        row["confidence_tier"] = 1
+    elif n_called >= tier_cfg["tier_2_min_tools"]:
+        row["confidence_tier"] = 2
+    elif n_called >= tier_cfg["tier_3_min_tools"]:
+        row["confidence_tier"] = 3
+    else:
+        row["confidence_tier"] = None
 
-merged["genomad_score"]    = merged["genomad_score"].fillna(0.0)
-merged["virsorter2_score"] = merged["virsorter2_score"].fillna(0.0)
-merged["pprmeta_score"]    = merged["pprmeta_score"].fillna(0.0)
+    by_union = n_called >= 1
+    by_score = score >= threshold
+    row["is_candidate"] = {"union": by_union, "score": by_score,
+                           "both": by_union and by_score}[rule]
 
-merged["viral_score"] = (
-    w_gn * merged["genomad_score"] +
-    w_vs * merged["virsorter2_score"] +
-    w_pp * merged["pprmeta_score"]
-)
+    # Tier A host-domain signal: lineage strings from geNomad and Cenote-Taker3.
+    # evidence_final refines this with the nr search.
+    row["tierA_host_domain"] = ev.majority_host_domain(lineages)
+    row["tierA_lineages"] = " | ".join(lineages) if lineages else None
 
-merged["PASS"] = merged["viral_score"] >= threshold
+    # Jordan's high-confidence phage rules, on Tier A evidence.
+    vibrant_called = bool(row.get("vibrant_called"))
+    rule_a = vibrant_called and row["tierA_host_domain"] == "prokaryote"
+    rule_b = vibrant_called and n_called == 1
+    row["high_confidence_phage"] = bool(rule_a or rule_b)
+    row["phage_rule_triggered"] = ("rule_a_vibrant_plus_prokaryote_taxonomy" if rule_a
+                                   else "rule_b_vibrant_only_call" if rule_b else None)
+    rows.append(row)
 
-# Reorder columns: sample | contig_id | per-tool scores | viral_score | PASS
-merged = merged[["sample", "contig_id", "genomad_score", "virsorter2_score", "pprmeta_score", "viral_score", "PASS"]]
+# ── Sanity checks on the assembled table ──────────────────────────────────────
+print("\nColumn checks:")
+ev.check_not_constant(rows, [f"{t}_called" for t in results], strict)
+ev.check_not_constant(rows, ["viral_score"] if norm_weights else [], strict)
 
-out = snakemake.output.scores
-Path(out).parent.mkdir(parents=True, exist_ok=True)
-merged.to_csv(out, sep="\t", index=False)
+# ── Write ─────────────────────────────────────────────────────────────────────
+import pandas as pd   # noqa: E402  (imported late: parsing above is stdlib only)
 
-n_pass = merged["PASS"].sum()
-print(f"Total contigs scored: {len(merged)}; passing threshold ({threshold}): {n_pass}", file=sys.stderr)
+df = pd.DataFrame(rows).sort_values(["sample_of_origin", "contig_id"])
+Path(snakemake.output.scores).parent.mkdir(parents=True, exist_ok=True)
+df.to_csv(snakemake.output.scores, sep="\t", index=False)
+
+# Candidate FASTA for Tier B. High-confidence phage is dropped here unless
+# include_phage, which keeps the expensive nr/CheckV searches off obvious phage.
+keep = set(df.loc[df["is_candidate"], "contig_id"])
+dropped_phage = set(df.loc[df["is_candidate"] & df["high_confidence_phage"], "contig_id"])
+if not include_phage:
+    keep -= dropped_phage
+
+written = 0
+with open(snakemake.output.candidates, "w") as out:
+    for path in snakemake.input.contigs:
+        emit = False
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith(">"):
+                    emit = line[1:].strip().split()[0] in keep
+                if emit:
+                    out.write(line)
+                    written += int(line.startswith(">"))
+
+print(f"\nContigs evaluated        : {len(df)}")
+print(f"Candidates ({rule})       : {int(df['is_candidate'].sum())}")
+print(f"High-confidence phage    : {int(df['high_confidence_phage'].sum())}"
+      f" ({'retained' if include_phage else 'excluded from candidates'})")
+print(f"Written to candidates.fa : {written}")
+print("Tier counts              : "
+      + ", ".join(f"{t}={n}" for t, n in df["confidence_tier"].value_counts(dropna=False).items()))
+
+if written == 0:
+    raise SystemExit("No candidate contigs: nothing for the downstream steps to run on")
+log.close()

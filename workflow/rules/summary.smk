@@ -1,8 +1,10 @@
+# Final per-contig summary: evidence table + abundance, one row per viral
+# contig, one abundance column per sample.
+
 rule summary:
     input:
-        scores="results/intermediate/evidence/viral_scores.tsv",
-        taxonomy="results/intermediate/taxonomy/viral_taxonomy.tsv",
-        checkv="results/intermediate/checkv/quality_summary.tsv",
+        evidence="results/evidence_table.tsv",
+        viral_fa="results/viral_contigs.fa",
         abundance="results/intermediate/abundance/abundance_matrix.tsv",
     output:
         tsv="results/viral_contigs_abundance.tsv",
@@ -12,6 +14,7 @@ rule summary:
         runtime=30,
     params:
         samples=READS_SAMPLES,
+        metric=config["coverm_metric"],
     conda:
         "../../envs/scripts.yaml"
     log:
