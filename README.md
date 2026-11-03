@@ -17,41 +17,64 @@ It is a **screening and prioritization** workflow. Its outputs rank contigs for
 human review; they are not calls that a given sequence is a virus.
 
 ```
-FASTQs (or contigs)
+FASTQs (or pre-assembled contigs)
        │
        ▼
-QC: fastp → [host removal] → [dedup]      ← per-sample reads, kept for mapping
+qc_reads: fastp → [host removal] → [clumpify dedup]   one rule per sample
+       │                                              clean reads are kept for mapping
+       ▼
+[normalize_reads: bbnorm] → assemble
+       │                      MEGAHIT co-assembly (default) | per-sample | metaSPAdes
+       ▼
+prep_contigs: length gate + "{unit}__{id}" rename → contigs.fa
        │
        ▼
-[bbnorm] → MEGAHIT co-assembly (or per-sample / metaSPAdes)
+split_fasta → n_chunks  (temp)
        │
-       ▼
-prep_contigs: length gate + "{unit}__{id}" rename
-       │
-       ▼
-Tier A, in parallel over n_chunks:
-   geNomad · VirSorter2 · VIBRANT · Cenote-Taker3 · DIAMOND/RefSeq · [PPR-Meta]
-       │
-       ▼
-evidence_score         ← union + weighted score + tiers → candidates.fa
-       │
-       ▼
-Tier B, candidates only:  DIAMOND vs nr · CheckV
-       │
-       ▼
-evidence_final         ← taxonomy, host domain, phage rules
-       │
-       ▼
-vOTU clustering        ← 95% ANI / 85% AF → one representative per cluster
-       │
-       ▼
-CoverM (minimap2-sr)   ← TPM per vOTU per sample
-       │
-       ▼
-results/evidence_table.tsv          ← the reviewer table (everything screened)
-results/viral_contigs_abundance.tsv ← summary + abundance
-results/viral_contigs.fa
+       ├───── TIER A ─ every contig, every enabled tool, scattered ──────────┐
+       │  geNomad · VirSorter2 · VIBRANT · Cenote-Taker3                     │
+       │  DIAMOND blastx vs RefSeq viral · [PPR-Meta, off by default]        │
+       └─────────────────────────────┬───────────────────────────────────────┘
+                                     ▼
+            evidence_score  →  evidence_tierA.tsv + candidates.fa
+                               union | score | both, weighted viral_score,
+                               confidence tiers, Tier A phage rules
+                                     │
+                    high-confidence phage dropped from candidates.fa
+                    (unless phage_filtering.include_phage) ──► not searched again
+                                     │
+       ┌───── TIER B ─ candidates only, the expensive half ──────────────────┐
+       │  DIAMOND blastx vs nr (cellular check, host domain) · CheckV        │
+       └─────────────────────────────┬───────────────────────────────────────┘
+                                     ▼
+            evidence_final  →  evidence_table.tsv        ← reviewer table, ALL contigs
+                               phage_evidence_table.tsv  ← phage, kept separate
+                               viral_contigs.fa          ← non-phage callers
+                                     │
+                                     ▼
+            votu_blastn (megablast, temp) → votu_cluster
+                               95% ANI AND 85% target coverage, greedy by length
+                               → votu_clusters.tsv + votu_representatives.fa
+                                     │
+                                     ▼
+            coverm: minimap2-sr, clean reads vs vOTU representatives
+                               → abundance_matrix.tsv (TPM) + all-metrics table
+                                     │
+                                     ▼
+            summarize  →  viral_contigs_abundance.tsv
+                          evidence + vOTU membership + one column per sample
 ```
+
+Two things the diagram encodes that are easy to miss. Tier B sees only the
+contigs Tier A called, minus high-confidence phage — that gating is where the
+runtime budget is spent, since nr is by far the most expensive search. And vOTU
+clustering runs on `viral_contigs.fa`, *after* phage exclusion, so no cluster
+can be orphaned by its representative being filtered later; abundance is
+therefore per vOTU, with members repeating their representative's value.
+
+`multiqc` runs alongside all of this, collecting the per-sample fastp JSON (and
+the QUAST reports when `assembly.quast` is on) into
+`results/qc/multiqc_report.html`.
 
 **Databases are downloaded and verified automatically** on the first production
 run, and cached in `databases/`. The one exception is DIAMOND's nr database
