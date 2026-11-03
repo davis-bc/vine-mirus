@@ -128,8 +128,11 @@ test_mode: true
 # Paths to reference databases. These are downloaded automatically on first run
 # by the database setup rules in workflow/rules/databases.smk.
 
-# geNomad database (genomad download-database databases/genomad_db)
-genomad_db: databases/genomad_db
+# geNomad database. `genomad download-database <dir>` creates a NESTED
+# "genomad_db" subdirectory inside <dir>, and geNomad's own end-to-end run
+# reads version.txt from that nested path, so this points one level deeper
+# than the directory databases.smk downloads into.
+genomad_db: databases/genomad_db/genomad_db
 
 # VirSorter2 database (virsorter setup --db-dir databases/virsorter2_db)
 virsorter2_db: databases/virsorter2_db

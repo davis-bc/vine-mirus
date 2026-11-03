@@ -3,6 +3,33 @@ from pathlib import Path
 
 configfile: "config/config.yaml"
 
+
+# ── Config helpers ─────────────────────────────────────────────────────────────
+_TRUE = {"true", "yes", "on", "1"}
+_FALSE = {"false", "no", "off", "0"}
+
+
+def cfg_bool(value, name):
+    """Boolean from config, tolerating the strings --config produces.
+
+    Snakemake evaluates `--config key=value` as a Python expression and keeps
+    the raw string when that fails, so `test_mode=false` arrives as the STRING
+    "false" (Python spells it False). bool("false") is True, which means a
+    production run would silently keep using the mocks. Parse explicitly and
+    reject anything ambiguous.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE:
+            return True
+        if text in _FALSE:
+            return False
+    raise ValueError(f"config {name!r} must be a boolean, got {value!r}")
+
 # ── Sample table ───────────────────────────────────────────────────────────────
 # Supported columns:
 #   sample | r1 | r2            → QC + assembly + viral detection + abundance
@@ -87,10 +114,11 @@ def get_contigs(wildcards):
 
 
 # ── Virus identification ───────────────────────────────────────────────────────
-TEST_MODE = bool(config.get("test_mode", False))
+TEST_MODE = cfg_bool(config.get("test_mode", False), "test_mode")
 SCRIPTS = workflow.basedir + "/scripts"
 
-TOOLS = config["virus_identification"]["tools"]
+TOOLS = {name: cfg_bool(on, f"virus_identification.tools.{name}")
+         for name, on in config["virus_identification"]["tools"].items()}
 ENABLED_TOOLS = [t for t, on in TOOLS.items() if on]
 if not ENABLED_TOOLS:
     raise ValueError("No tools enabled under virus_identification.tools")
@@ -113,7 +141,13 @@ TOOL_TABLE = {
 
 # ── vOTU clustering and abundance ──────────────────────────────────────────────
 VOTU_CFG = config["votu_clustering"]
-VOTU = bool(VOTU_CFG["enabled"])
+VOTU = cfg_bool(VOTU_CFG["enabled"], "votu_clustering.enabled")
+
+# Collation toggles, parsed once so a CLI override cannot arrive as a string.
+INCLUDE_PHAGE = cfg_bool(config["phage_filtering"]["include_phage"],
+                         "phage_filtering.include_phage")
+STRICT_CHECKS = cfg_bool(config["collation"]["strict_checks"], "collation.strict_checks")
+DOWNLOAD_NR = cfg_bool(config.get("download_nr", False), "download_nr")
 
 PRIMARY_METRIC = config["abundance"]["primary_metric"]
 # Primary first so run_coverm.py can report it without re-reading the config.

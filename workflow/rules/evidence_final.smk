@@ -28,8 +28,8 @@ rule evidence_final:
         taxdump="" if TEST_MODE else config["taxdump_dir"],
         diamond=config["virus_identification"]["diamond"],
         confidence_tiers=config["collation"]["confidence_tiers"],
-        strict_checks=config["collation"]["strict_checks"],
-        include_phage=config["phage_filtering"]["include_phage"],
+        strict_checks=STRICT_CHECKS,
+        include_phage=INCLUDE_PHAGE,
     conda:
         "../../envs/scripts.yaml"
     log:

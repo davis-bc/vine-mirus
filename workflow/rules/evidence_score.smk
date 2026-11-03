@@ -34,7 +34,8 @@ rule evidence_score:
         diamond=config["virus_identification"]["diamond"],
         weights=config["tool_weights"],
         collation=config["collation"],
-        include_phage=config["phage_filtering"]["include_phage"],
+        include_phage=INCLUDE_PHAGE,
+        strict_checks=STRICT_CHECKS,
         threshold=config["viral_score_threshold"],
     conda:
         "../../envs/scripts.yaml"

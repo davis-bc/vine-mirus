@@ -1,0 +1,40 @@
+# Local execution profile — the 24-core workstation (goldberg-r710).
+#
+#   snakemake --snakefile workflow/Snakefile --profile profiles/local
+#
+# Unlike the Slurm profile, `cores` and `resources` here are a budget shared by
+# everything running at once, so Snakemake packs jobs up to those limits. Each
+# rule's own threads/mem_mb are what it is charged against that budget.
+
+cores: 24
+
+resources:
+  # TOTAL concurrent memory, not per job. Set this to roughly 90% of the
+  # machine's RAM: the heavy rules declare mem_mb=32000 each, so a 64 GB
+  # budget runs two of them at a time and queues the rest.
+  #
+  # It also bounds the Java tools. bbnorm and clumpify pre-commit their heap,
+  # and those rules additionally cap -Xmx at 80% of min(requested, MemAvailable)
+  # so a value set too high here cannot OOM-kill them outright.
+  - mem_mb=64000
+
+use-conda: true
+# To share one env store across clones (and avoid hours of re-solving), add
+#   --conda-prefix /abs/path/to/snakemake-envs
+# on the command line. It is not set here because profile values are not
+# tilde- or variable-expanded, so "~/..." would create a literal "~" directory.
+
+# Surface failures without losing the rest of a long overnight run.
+keep-going: true
+printshellcmds: true
+rerun-incomplete: true
+
+# Local disk, so no shared-filesystem latency to wait out.
+latency-wait: 5
+
+# Faster DAG solving than the default ILP on a workflow this size; the job
+# order matters less here than on a cluster with a queue.
+scheduler: greedy
+
+default-resources:
+  runtime: 120

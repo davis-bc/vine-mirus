@@ -28,7 +28,7 @@ thresholds = params.thresholds
 weights = params.weights
 collation = params.collation
 include_phage = bool(params.include_phage)
-strict = bool(collation["strict_checks"])
+strict = bool(params.strict_checks)
 
 # ── Contigs ───────────────────────────────────────────────────────────────────
 lengths = {}

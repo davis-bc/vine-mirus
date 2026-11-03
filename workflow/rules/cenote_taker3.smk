@@ -17,6 +17,10 @@ _CT3_CMD = (
     set -euo pipefail
     rm -rf {params.ct3_workdir}/{params.run_title}
     mkdir -p {params.ct3_workdir}
+    # Cenote-Taker3 reads CENOTE_DBS as well as --cenote-dbs. Exported per job
+    # rather than via `conda env config vars set`, which needs the env
+    # reactivated and is lost whenever Snakemake rebuilds it.
+    export CENOTE_DBS=$(realpath {params.db})
     cenotetaker3 -c {input.contigs} -r {params.run_title} \
         -p {params.prune} -wd {params.ct3_workdir} \
         -db {params.domains} --cenote-dbs {params.db} \

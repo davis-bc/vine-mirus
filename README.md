@@ -175,27 +175,93 @@ Database paths are automatically set to `databases/` and require no editing.
 ## Databases
 
 Databases are downloaded automatically the first time vine-mirus runs in
-production mode (`test_mode: false`). They are stored in `databases/` at the
-repository root and reused across all subsequent runs.
+production mode (`test_mode: false`), into `databases/` at the repository root,
+and reused by every later run.
 
 | Database | Size | Tool | Download rule |
 |----------|------|------|---------------|
 | geNomad DB | ~3 GB | geNomad | `download_genomad_db` |
 | VirSorter2 DB | ~10 GB | VirSorter2 | `download_virsorter2_db` |
+| VIBRANT DB | ~11 GB | VIBRANT | `download_vibrant_db` |
+| Cenote-Taker3 DBs | ~3 GB | Cenote-Taker3 | `download_cenote_taker3_db` |
 | CheckV DB | ~3 GB | CheckV | `download_checkv_db` |
-| NCBI taxdump | ~70 MB | DIAMOND/taxopy | `download_taxdump` |
-| Viral RefSeq DIAMOND | ~2 GB | DIAMOND | `build_diamond_db` |
+| NCBI taxdump | ~70 MB | taxopy + DIAMOND `makedb` | `download_taxdump` |
+| `prot.accession2taxid` | ~2 GB | DIAMOND `makedb --taxonmap` | `download_prot_accession2taxid` |
+| RefSeq viral DIAMOND | ~2 GB | DIAMOND | `build_diamond_refseq_viral_db` |
+| nr DIAMOND | **~250 GB+** | DIAMOND | `build_diamond_nr_db` (opt-in) |
 | PPR-Meta scripts | ~50 MB | PPR-Meta | `setup_pprmeta` |
 
-To trigger all database downloads without running the full pipeline:
+Fetch everything the enabled tools need, without running any analysis:
 
 ```bash
-snakemake --snakefile workflow/Snakefile \
+snakemake --snakefile workflow/Snakefile databases \
           --config samples=config/samples.tsv test_mode=false \
-          --until download_genomad_db download_virsorter2_db \
-                  download_checkv_db download_taxdump build_diamond_db \
           --cores 4 --use-conda
 ```
+
+(The target name must come before `--config`; Snakemake otherwise reads it as
+a config entry.)
+
+### nr is opt-in
+
+The nr search is Tier B's cellular-false-positive check, and nr is hundreds of
+GB and many hours to download and build, so it is never fetched implicitly.
+Pick one:
+
+- `download_nr: true` in `config/config.yaml` to build it locally,
+- point `diamond_nr_db` at an existing taxonomy-enabled `nr.dmnd` (e.g. a
+  shared cluster path), or
+- `virus_identification.tools.diamond_nr: false` to skip the search.
+
+Until then, the `diamond_nr_db_missing` rule fails with exactly those three
+options rather than silently starting a 250 GB download.
+
+### Why each download is verified
+
+Several of these downloaders exit 0 having written nothing usable, or having
+written it one level deeper than the tool that consumes it then looks:
+
+| Downloader | What it actually does |
+|------------|----------------------|
+| `genomad download-database X` | creates `X/genomad_db/` — `config.genomad_db` points at the nested path |
+| `checkv download_database X` | creates `X/checkv-db-v1.N/` — resolved at run time, so no version is pinned here |
+| `download-db.sh X` | creates `X/databases/`; VIBRANT also needs a sibling `files/`, which ships in the package. Passing the parent gives "could not identify KEGG HMM files" |
+| `virsorter setup` | writes to the **current directory**, ignoring `--db-dir` and `--config`, while still reporting success. The rule cd's into the target first |
+
+Every rule therefore checks for a specific expected file before its `.done`
+sentinel is written, and `build_diamond_refseq_viral_db` takes RefSeq viral
+protein parts until one 404s — fetching only `viral.1` silently truncates the
+reference, and the searches then just find less.
+
+The DIAMOND databases are built with `--taxonmap/--taxonnodes/--taxonnames`, so
+every hit carries a real taxid. Joining accessions to taxids after the search
+instead is what produced `staxids=0` on every hit in the original pipeline: a
+well-formed result in which nothing could ever be classified as viral. The
+DIAMOND rule fails if it ever sees that again.
+
+### Hardware notes (CPUs without AVX2)
+
+The reference deployment (`goldberg-r710`, 24 cores) has SSE4.2 but no AVX2, and
+several current conda builds crash there with "Illegal instruction":
+
+| Tool | Handling |
+|------|----------|
+| MEGAHIT | pinned to `1.2.8` in `envs/qc_assembly.yaml` (harmless on newer CPUs) |
+| DIAMOND | `envs/checkv.yaml` pins `2.1.8`; the search envs use a current release |
+| MMseqs2 | opt-in binary swap, see below |
+
+MMseqs2 (inside Cenote-Taker3) has no suitable conda build, so
+`envs/cenote_taker3.post-deploy.sh` downloads the static SSE4.1 build and swaps
+it in. Snakemake runs post-deploy scripts whenever it creates the environment,
+which is what keeps the fix from being silently reverted by the next env
+rebuild. It is opt-in per machine:
+
+```bash
+export VINE_LEGACY_CPU=1   # before the run, on a CPU without AVX2
+```
+
+The script verifies the downloaded binary actually runs before replacing
+anything, and keeps the conda build alongside it as `mmseqs.conda`.
 
 ---
 
@@ -203,17 +269,32 @@ snakemake --snakefile workflow/Snakefile \
 
 ### Local execution
 
+A local profile is provided for the 24-core workstation. Unlike the Slurm
+profile, its `cores` and `resources` are a budget shared by everything running
+at once, so Snakemake packs jobs up to those limits — set `mem_mb` there to
+roughly 90% of the machine's RAM.
+
 ```bash
 # Production (downloads databases on first run)
 snakemake --snakefile workflow/Snakefile \
           --config samples=config/my_samples.tsv test_mode=false \
-          --cores 16 --use-conda
+          --profile profiles/local
 
 # Test mode (mocks all tools — no databases, finishes in minutes)
 snakemake --snakefile workflow/Snakefile \
           --config samples=config/my_samples.tsv \
           --cores 4 --use-conda --scheduler greedy
 ```
+
+Boolean config values given on the command line are parsed explicitly, so
+`test_mode=false`, `test_mode=False` and `test_mode=no` all work and anything
+ambiguous is rejected. Snakemake itself evaluates `--config` values as Python,
+where bare `false` is not a keyword and arrives as a non-empty string — which
+would otherwise leave a "production" run quietly using the mocks.
+
+Nested keys cannot be overridden with `--config` at all (`votu_clustering` is a
+mapping, not a scalar). Copy `config/config.yaml`, edit it, and pass
+`--configfile` instead.
 
 ### SLURM execution
 
@@ -357,16 +438,28 @@ for a real production run.
 
 ## Conda Environments
 
-vine-mirus uses 6 minimal conda environments:
+One environment per dependency island. There are more than the ideal four or
+five because of genuine conflicts, noted below.
 
 | Environment | Tools |
 |-------------|-------|
-| `envs/qc_assembly.yaml` | fastp, MEGAHIT |
+| `envs/qc_assembly.yaml` | fastp, MEGAHIT (`=1.2.8`), metaSPAdes, bbmap, minimap2, samtools, seqkit |
+| `envs/reports.yaml` | MultiQC, QUAST |
 | `envs/genomad.yaml` | geNomad |
 | `envs/virsorter2.yaml` | VirSorter2 (bioconda: `virsorter`) |
+| `envs/vibrant.yaml` | VIBRANT `=1.2.1` (needs `numpy<1.24`) |
+| `envs/cenote_taker3.yaml` | Cenote-Taker3 `=3.4.4` (+ an opt-in MMseqs2 swap, see Hardware notes) |
+| `envs/diamond.yaml` | current DIAMOND, for the RefSeq viral and nr searches |
+| `envs/checkv.yaml` | CheckV, BLAST (vOTU clustering), DIAMOND `=2.1.8` |
 | `envs/pprmeta.yaml` | TensorFlow, biopython (PPR-Meta runtime) |
-| `envs/viral_analysis.yaml` | CheckV, DIAMOND, CoverM, BWA, taxopy |
-| `envs/scripts.yaml` | Python, pandas, biopython (evidence scoring + summary) |
+| `envs/viral_analysis.yaml` | CoverM, BWA, taxopy |
+| `envs/scripts.yaml` | Python, pandas, biopython, taxopy (all pipeline scripts and mocks) |
+| `envs/download.yaml` | curl, tar, unzip — the database download rules only |
+
+`checkv` and `diamond` are separate because CheckV caps DIAMOND at `≤2.1.8`
+while the nr and RefSeq searches want a current release. In test mode every
+tool rule uses `envs/scripts.yaml` instead, because the mocks are Python and the
+real tools are never invoked.
 
 Environments are built automatically on first use by Snakemake (`--use-conda`).
 

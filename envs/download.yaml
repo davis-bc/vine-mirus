@@ -1,0 +1,11 @@
+name: download
+channels:
+  - conda-forge
+dependencies:
+  # Plain fetch-and-unpack tooling for the database download rules, so they do
+  # not depend on what happens to be installed on a cluster node. Tiny env,
+  # kept separate because every other env here is a heavyweight tool stack.
+  - curl>=8
+  - tar
+  - gzip
+  - unzip

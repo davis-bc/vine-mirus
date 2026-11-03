@@ -1,3 +1,5 @@
+import os
+
 # vOTU clustering — dereplicate the viral contigs into viral operational
 # taxonomic units (95% ANI over 85% of the shorter sequence by default) and
 # keep one representative per cluster.
@@ -52,7 +54,9 @@ if VOTU:
             # Self-comparison of a whole contig set: the default of 500 would
             # silently truncate the neighbour list for abundant populations.
             max_target_seqs=VOTU_CFG["max_target_seqs"],
-            scripts=SCRIPTS,
+            # Derived from the tracked mock input when there is one; the real
+            # search does not use params.scripts at all.
+            scripts=lambda wc, input: os.path.dirname(input.lib[0]) if input.lib else SCRIPTS,
         conda:
             "../../envs/scripts.yaml" if TEST_MODE else "../../envs/checkv.yaml"
         benchmark:

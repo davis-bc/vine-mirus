@@ -1,3 +1,5 @@
+import os
+
 # PPR-Meta (optional; virus_identification.tools.pprmeta).
 # Disabled by default: phage/plasmid oriented, and it pulls in TensorFlow.
 
@@ -24,7 +26,9 @@ rule setup_pprmeta:
         script=PPRMETA_SCRIPT,
     params:
         url="https://github.com/zhenchengfang/PPR-Meta/releases/download/v1.1/PPR_Meta_v_1_1.zip",
-        outdir=PPRMETA_DIR,
+        outdir=lambda wc, output: os.path.dirname(output.script),
+    conda:
+        "../../envs/download.yaml"
     log:
         "logs/setup_pprmeta.log"
     shell:
