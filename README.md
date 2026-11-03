@@ -8,43 +8,54 @@ identifying, annotating, and quantifying viral contigs in metagenomic samples.
 ## Overview
 
 vine-mirus assembles paired-end reads (or accepts pre-assembled contigs), screens
-them through three complementary viral detection tools, fuses their scores into a
-single evidence-weighted probability, assigns NCBI taxonomy, assesses genome
-completeness, and reports per-contig abundances across all samples.
+them through up to seven complementary viral detection tools, collates the
+evidence into one reviewer-facing table, assigns NCBI taxonomy, assesses genome
+completeness, dereplicates the survivors into vOTUs, and reports per-vOTU
+abundance across all samples.
+
+It is a **screening and prioritization** workflow. Its outputs rank contigs for
+human review; they are not calls that a given sequence is a virus.
 
 ```
 FASTQs (or contigs)
        │
        ▼
-fastp (QC)  ──►  MEGAHIT (assembly)
-                        │
-          ┌─────────────┼─────────────┐
-          ▼             ▼             ▼
-   geNomad  VirSorter2  VIBRANT  Cenote-Taker3  DIAMOND/RefSeq  [PPR-Meta]
-          └─────────────┴──────┬──────┴───────────────┘
-                        ▼
-               evidence_score  ←  Tier A: union + weighted score + tiers
-                        │                 → candidates.fa
-                        ▼
-          DIAMOND vs nr  +  CheckV  ←  Tier B: candidates only
-                        │
-                        ▼
-               evidence_final  ←  taxonomy, host domain, phage rules
-                        │
-                        ▼
-                      vOTU  ←  95% ANI / 85% AF → representatives
-                        │
-                        ▼
-                     CoverM  ←  minimap2-sr → TPM per vOTU per sample
-                        │
-                        ▼
-          results/viral_contigs_abundance.tsv
-          results/evidence_table.tsv
-          results/viral_contigs.fa
+QC: fastp → [host removal] → [dedup]      ← per-sample reads, kept for mapping
+       │
+       ▼
+[bbnorm] → MEGAHIT co-assembly (or per-sample / metaSPAdes)
+       │
+       ▼
+prep_contigs: length gate + "{unit}__{id}" rename
+       │
+       ▼
+Tier A, in parallel over n_chunks:
+   geNomad · VirSorter2 · VIBRANT · Cenote-Taker3 · DIAMOND/RefSeq · [PPR-Meta]
+       │
+       ▼
+evidence_score         ← union + weighted score + tiers → candidates.fa
+       │
+       ▼
+Tier B, candidates only:  DIAMOND vs nr · CheckV
+       │
+       ▼
+evidence_final         ← taxonomy, host domain, phage rules
+       │
+       ▼
+vOTU clustering        ← 95% ANI / 85% AF → one representative per cluster
+       │
+       ▼
+CoverM (minimap2-sr)   ← TPM per vOTU per sample
+       │
+       ▼
+results/evidence_table.tsv          ← the reviewer table (everything screened)
+results/viral_contigs_abundance.tsv ← summary + abundance
+results/viral_contigs.fa
 ```
 
-**Databases are downloaded automatically** on first execution and cached in
-`databases/` — no manual setup required.
+**Databases are downloaded and verified automatically** on the first production
+run, and cached in `databases/`. The one exception is DIAMOND's nr database
+(~250 GB), which is opt-in — see [Databases](#databases).
 
 ---
 
@@ -77,16 +88,30 @@ cd vine-mirus
 cp config/samples.tsv config/my_samples.tsv
 # Edit my_samples.tsv — see "Sample Sheet" section below
 
-# 3. Run (databases download automatically on first run)
+# 3. Dry-run first, always
 snakemake --snakefile workflow/Snakefile \
-          --config samples=config/my_samples.tsv \
-          --cores 16 --use-conda
+          --config samples=config/my_samples.tsv test_mode=false -n
 
-# 4. Check results
+# 4. Fetch the databases (hours; see "Databases" before the first time)
+snakemake --snakefile workflow/Snakefile databases \
+          --config samples=config/my_samples.tsv test_mode=false \
+          --cores 4 --use-conda
+
+# 5. Run
+snakemake --snakefile workflow/Snakefile \
+          --config samples=config/my_samples.tsv test_mode=false \
+          --profile profiles/local
+
+# 6. Check results
 ls results/
-# results/viral_contigs_abundance.tsv  ← main output
-# results/viral_contigs.fa             ← all passing viral sequences
+# results/evidence_table.tsv           ← the reviewer table
+# results/viral_contigs_abundance.tsv  ← summary + per-sample abundance
+# results/viral_contigs.fa             ← the screened viral sequences
 ```
+
+`test_mode: true` is the **default**, so leaving it out runs the mocks rather
+than the real tools. Try that first — it finishes in seconds and needs no
+databases.
 
 ---
 
@@ -115,8 +140,9 @@ sample1 /data/sample1_contigs.fa
 sample2 /data/sample2_contigs.fa
 ```
 
-Skips QC and assembly. Viral detection, taxonomy, and CheckV are run but no
-read-based abundance estimation is performed (CoverM is skipped).
+Skips QC and assembly. Viral detection, taxonomy, CheckV and vOTU clustering
+all run; with no reads there is nothing to map, so the abundance columns are
+absent and CoverM is stubbed out.
 
 ### Option 3 — Pre-assembled contigs + reads for abundance
 
@@ -126,8 +152,9 @@ sample1 /data/sample1_R1.fastq.gz       /data/sample1_R2.fastq.gz       /data/sa
 sample2 /data/sample2_R1.fastq.gz       /data/sample2_R2.fastq.gz       /data/sample2.fa
 ```
 
-Uses provided contigs for viral detection but still runs fastp + CoverM for
-read-level abundance across all samples.
+Uses the provided contigs for viral detection but still runs QC + CoverM, so
+abundance is measured from the reads. Contigs supplied this way are never
+re-assembled, and their IDs are still renamed to `{sample}__{id}`.
 
 ---
 
@@ -138,10 +165,15 @@ All parameters are in `config/config.yaml`. Key settings:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `min_contig_length` | `1000` | Minimum contig length passed to viral tools |
-| `viral_score_threshold` | `0.5` | Minimum weighted evidence score to retain a contig |
-| `tool_weights.genomad` | `0.34` | Weight for geNomad score |
-| `tool_weights.virsorter2` | `0.33` | Weight for VirSorter2 score |
-| `tool_weights.pprmeta` | `0.33` | Weight for PPR-Meta score |
+| `viral_score_threshold` | `0.5` | `viral_score` cutoff, used only when `candidate_rule` is `score` or `both` |
+| `collation.candidate_rule` | `union` | `union` (any tool called it), `score` (weighted score ≥ threshold), or `both` |
+| `collation.confidence_tiers` | `4 / 2 / 1` | Tool counts for tiers 1/2/3 — **review priority only, never a filter** |
+| `collation.strict_checks` | `true` | Fail the run when a tool matched zero contig IDs or a column is constant |
+| `phage_filtering.include_phage` | `false` | Keep high-confidence phage in the candidate set (it always gets its own table) |
+| `tool_weights.genomad` | `0.3` | Weight for the geNomad score |
+| `tool_weights.virsorter2` | `0.3` | Weight for the VirSorter2 score |
+| `tool_weights.vibrant` | `0.2` | Weight for the VIBRANT quality tier, mapped to 0–1 |
+| `tool_weights.pprmeta` | `0.2` | Weight for the PPR-Meta score |
 | `abundance.primary_metric` | `tpm` | Primary abundance metric (`tpm`, `rpkm`, `mean`, `count`, `covered_fraction`) |
 | `abundance.additional_metrics` | `[rpkm, mean, covered_fraction]` | Also computed, into `abundance_all_metrics.tsv` |
 | `votu_clustering.enabled` | `true` | Dereplicate viral contigs into vOTUs and measure abundance on representatives |
@@ -168,7 +200,12 @@ All parameters are in `config/config.yaml`. Key settings:
 should stay on if phage filtering matters: the high-confidence phage rules key
 on its calls.
 
-Database paths are automatically set to `databases/` and require no editing.
+Weights are renormalized over the enabled tools that produce a score, so turning
+one off does not depress everything else. Cenote-Taker3 and the DIAMOND searches
+contribute presence/absence calls rather than scores: they move
+`n_tools_called` and the tier, but carry no weight.
+
+Database paths default to `databases/` and need no editing.
 
 ---
 
@@ -423,6 +460,21 @@ Use test mode to:
 - Verify the pipeline logic end-to-end before acquiring databases
 - Develop and debug changes to the workflow
 - Run CI/CD checks
+
+**Exact counts drift between runs.** The mocks are seeded, but MEGAHIT is not
+reproducible run to run (two co-assemblies of the same reads give 205 contigs
+both times, with different content), and the mocks draw per contig in file
+order. So check the invariants rather than the totals: every enabled tool
+matching 100% of contig IDs, no duplicate `contig_id`, `sample_of_origin`
+derived from the prefix, no phage leaking into the summary, every viral contig
+present in the vOTU table, and abundance columns that are neither missing nor
+all zero.
+
+The mocks deliberately reproduce each tool's **real ID quirks** — VirSorter2's
+`||full` suffixes, VIBRANT's and Cenote-Taker3's full-FASTA-header IDs,
+Cenote-Taker3's unusable internal `contig` column — so the normalization that
+joins the tools together is actually exercised rather than bypassed. A mock run
+that passes is evidence the joins work; it says nothing about biology.
 
 ```bash
 # Explicit override to test mode
