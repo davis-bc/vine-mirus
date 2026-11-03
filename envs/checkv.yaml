@@ -1,0 +1,12 @@
+name: checkv
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - checkv>=1.0
+  # CheckV 1.0.3 caps diamond at <=2.1.8; that build also avoids the AVX2
+  # crash on older CPUs. The nr/RefSeq searches need a newer DIAMOND, which is
+  # why envs/diamond.yaml exists separately.
+  - diamond=2.1.8
+  - blast>=2.14          # makeblastdb/blastn for vOTU clustering
+  - prodigal-gv

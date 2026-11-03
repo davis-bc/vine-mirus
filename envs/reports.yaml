@@ -1,0 +1,7 @@
+name: reports
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - multiqc=1.*
+  - quast=5.2.*

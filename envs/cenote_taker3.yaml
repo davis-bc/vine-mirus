@@ -1,0 +1,10 @@
+name: cenote_taker3
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - cenote-taker3=3.4.4
+  # mmseqs2 is deliberately NOT pinned here: cenote-taker3=3.4.4 requires
+  # mmseqs2 >= 18.8cc5c, and that build crashes on CPUs without AVX2. No single
+  # pin satisfies both. On such hosts set VINE_LEGACY_CPU=1 and the
+  # post-deploy script swaps in the SSE4.1 binary (added in a later phase).

@@ -6,14 +6,119 @@ min_contig_length: 1000
 # Minimum combined viral probability score to retain a contig
 viral_score_threshold: 0.5
 
-# Per-tool weights for evidence scoring (must sum to 1.0)
-tool_weights:
-  genomad: 0.34
-  virsorter2: 0.33
-  pprmeta: 0.33
+# ── Virus identification tools ────────────────────────────────────────────────
+# Which detection tools run. PPR-Meta is off by default: it is phage/plasmid
+# oriented (a poor fit for a eukaryotic-virus focus) and pulls in TensorFlow.
+# VIBRANT stays enabled because the phage-exclusion rules depend on its calls.
+virus_identification:
+  tools:
+    genomad: true
+    virsorter2: true
+    vibrant: true
+    cenote_taker3: true
+    diamond_refseq_viral: true   # DIAMOND blastx vs RefSeq viral proteins
+    diamond_nr: true             # DIAMOND blastx vs NCBI nr (cellular false positives)
+    pprmeta: false
 
-# CoverM abundance metric
-coverm_metric: rpkm
+  # geNomad / VirSorter2 / VIBRANT / Cenote-Taker3 are the slow steps. Splitting
+  # the contigs into chunks lets them run as parallel jobs. 1 = no splitting.
+  n_chunks: 1
+
+  # Per-tool thresholds applied when PARSING output into a "called" boolean.
+  # geNomad is run with --min-score 0.0 so a score exists for every contig,
+  # which means presence in its summary is not itself a call.
+  genomad_min_score: 0.7
+  virsorter2_min_score: 0.5
+  pprmeta_min_score: 0.5
+
+  diamond:
+    evalue: "1e-5"
+    max_target_seqs: 25
+    top_n_hits: 10               # hits considered for the majority-vote call
+    # Hits within this % of the contig's best bitscore qualify for the vote.
+    # TUNE (Jordan, high priority): placeholder pending real-data benchmarking.
+    bitscore_margin_pct: 70
+    sensitivity: "--sensitive"   # --fast | --sensitive | --very-sensitive
+    # nr is huge; restrict it to contigs already called by a Tier A tool.
+    nr_scope: candidates         # candidates | all
+
+  cenote_taker3:
+    # Hallmark domain categories: all three for broad eukaryotic-virus detection.
+    domains: "virion rdrp dnarep"
+    prune_prophage: true
+
+# ── Evidence collation ────────────────────────────────────────────────────────
+collation:
+  # How a contig becomes a candidate:
+  #   union  - any tool called it (high recall; Jordan's Program 1 behaviour)
+  #   score  - weighted viral_score >= viral_score_threshold
+  #   both   - must satisfy both
+  # viral_score and the tier are always reported either way, so reviewers can
+  # sort regardless of which rule selects.
+  candidate_rule: union
+
+  # Review priority only - tiers never filter anything.
+  confidence_tiers:
+    tier_1_min_tools: 4
+    tier_2_min_tools: 2
+    tier_3_min_tools: 1
+
+  # Jordan's lesson: a clean exit code is not proof of success. After parsing,
+  # fail if an enabled tool matched zero contigs or a column is entirely
+  # constant (the signature of an ID-format or taxonomy-mapping break).
+  strict_checks: true
+
+phage_filtering:
+  # Default off: this project targets eukaryotic viruses. High-confidence phage
+  # is written to a separate table for independent review either way.
+  include_phage: false
+  # Rules (Jordan): A = VIBRANT called AND majority host domain prokaryote;
+  #                 B = VIBRANT is the only tool that called it.
+
+# Per-tool weights for the weighted viral_score. Renormalized over the enabled
+# tools that produce a usable score, so disabling one does not depress scores.
+# Cenote-Taker3 and the DIAMOND searches contribute presence/absence calls, not
+# scores, so they affect n_tools_called and the tier but carry no weight here.
+tool_weights:
+  genomad: 0.3
+  virsorter2: 0.3
+  vibrant: 0.2
+  pprmeta: 0.2
+
+# ── vOTU clustering ───────────────────────────────────────────────────────────
+# Dereplicates the viral contigs into viral operational taxonomic units, then
+# measures abundance against one representative per cluster so a single virus
+# population's reads are not split across near-identical contigs.
+#
+# Thresholds are the community convention (95% ANI over 85% of the shorter
+# sequence; Gregory et al. Global Ocean Virome, and the method CheckV's
+# anicalc.py/aniclust.py implement). The clustering runs AFTER phage exclusion.
+#
+# Jordan's note, still open: on a good co-assembly most redundancy is already
+# resolved, so this step may return mostly singletons. The singleton fraction
+# in logs/votu_cluster.log is the diagnostic - check it rather than assuming.
+votu_clustering:
+  enabled: true
+  ani_threshold: 95               # % identity, length-weighted over all HSPs
+  target_coverage_threshold: 85   # % of the absorbed contig covered by the rep
+  # All three thresholds must be met. 0 means "no query-coverage requirement",
+  # which is aniclust's default: a short contig may be absorbed by a much
+  # longer representative that it only covers a small part of.
+  query_coverage_threshold: 0
+  blastn_evalue: "1e-10"          # strict: this is a same-dataset self-comparison
+  blastn_task: megablast          # highly similar sequences; much faster than blastn
+  max_target_seqs: 10000          # the default 500 would truncate neighbour lists
+
+# ── Abundance ─────────────────────────────────────────────────────────────────
+# TPM is primary: it corrects for both contig length and sequencing depth, so
+# it compares across samples better than RPKM. The extra metrics are written to
+# results/intermediate/abundance/abundance_all_metrics.tsv for review.
+abundance:
+  primary_metric: tpm            # tpm | rpkm | mean | count | covered_fraction
+  additional_metrics:
+    - rpkm
+    - mean
+    - covered_fraction
 
 # Test mode: when true, viral prediction tools produce mock outputs instead of
 # running the real tools. Used for end-to-end pipeline logic testing without databases.
@@ -23,27 +128,68 @@ test_mode: true
 # Paths to reference databases. These are downloaded automatically on first run
 # by the database setup rules in workflow/rules/databases.smk.
 
-# geNomad database (genomad download-database databases/genomad_db)
-genomad_db: databases/genomad_db
+# geNomad database. `genomad download-database <dir>` creates a NESTED
+# "genomad_db" subdirectory inside <dir>, and geNomad's own end-to-end run
+# reads version.txt from that nested path, so this points one level deeper
+# than the directory databases.smk downloads into.
+genomad_db: databases/genomad_db/genomad_db
 
 # VirSorter2 database (virsorter setup --db-dir databases/virsorter2_db)
 virsorter2_db: databases/virsorter2_db
 
-# CheckV database (checkv download_database databases/checkv_db)
+# CheckV database. The downloader creates a NESTED versioned directory, so the
+# real path is databases/checkv_db/checkv-db-v1.5 (resolved by databases.smk).
 checkv_db: databases/checkv_db
+
+# VIBRANT needs TWO paths: the "databases" dir (-d) and its sibling "files" dir
+# (-m). Both live under this parent.
+vibrant_db: databases/vibrant_db
+
+# Cenote-Taker3 database directory (passed via --cenote-dbs)
+cenote_taker3_db: databases/cenote_taker3_db
 
 # NCBI taxdump directory (contains nodes.dmp and names.dmp)
 taxdump_dir: databases/taxdump
 
-# DIAMOND viral RefSeq database (built from NCBI viral RefSeq proteins)
-diamond_db: databases/diamond/nr_viral.dmnd
+# DIAMOND database of NCBI viral RefSeq proteins, taxonomy-enabled
+diamond_refseq_viral_db: databases/diamond/refseq_viral.dmnd
 
-# ── fastp ─────────────────────────────────────────────────────────────────────
-fastp_min_length: 50
-fastp_qualified_quality: 15
+# DIAMOND database of NCBI nr. ~300 GB built; NOT downloaded automatically
+# unless download_nr is true (see databases.smk).
+diamond_nr_db: databases/diamond/nr.dmnd
+download_nr: false
 
-# ── MEGAHIT ───────────────────────────────────────────────────────────────────
-megahit_min_contig_len: 500   # pre-filter; viral tools re-filter at min_contig_length
+# ── Read preprocessing ────────────────────────────────────────────────────────
+# Order inside the single qc_reads rule: fastp → host removal (opt) → dedup (opt).
+# Trimming runs first so host mapping only sees reads that survive QC.
+preprocessing:
+  fastp:
+    min_length: 50
+    qualified_quality: 15       # Jordan's pipeline used 30 (Q30); see README
+  host_removal:
+    # Strongly recommended for tissue samples (fish reads dominate, and removing
+    # them shrinks assembly + every downstream step). Off here only because it
+    # needs a user-supplied reference.
+    enabled: false
+    reference_genomes: []       # list of FASTA paths; concatenated and indexed once
+    # Keeps only pairs where BOTH mates are unmapped to host (samtools -f 12).
+    # Discordant pairs (one mate on host) are treated as host-derived.
+  deduplication:
+    enabled: false              # clumpify.sh dedupe=t
+  normalization:
+    enabled: true               # bbnorm; affects reads used for ASSEMBLY only.
+    target_depth: 50            # Abundance mapping always uses un-normalized reads.
+    min_depth: 0                # Jordan: benchmark against 2 on real data
+
+# ── Assembly ──────────────────────────────────────────────────────────────────
+assembly:
+  # coassembly : pool all read samples (without provided contigs), normalize
+  #              once, assemble once → contigs prefixed "coasm__"
+  # per_sample : assemble each sample separately → contigs prefixed "{sample}__"
+  mode: coassembly
+  assembler: megahit            # megahit | metaspades
+  min_contig_len: 500           # assembler pre-filter; viral tools gate at min_contig_length
+  quast: true                   # QUAST report on each assembly
 
 # ── VirSorter2 ────────────────────────────────────────────────────────────────
 virsorter2_groups:

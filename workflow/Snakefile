@@ -3,26 +3,86 @@ from pathlib import Path
 
 configfile: "config/config.yaml"
 
+
+# ── Config helpers ─────────────────────────────────────────────────────────────
+_TRUE = {"true", "yes", "on", "1"}
+_FALSE = {"false", "no", "off", "0"}
+
+
+def cfg_bool(value, name):
+    """Boolean from config, tolerating the strings --config produces.
+
+    Snakemake evaluates `--config key=value` as a Python expression and keeps
+    the raw string when that fails, so `test_mode=false` arrives as the STRING
+    "false" (Python spells it False). bool("false") is True, which means a
+    production run would silently keep using the mocks. Parse explicitly and
+    reject anything ambiguous.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE:
+            return True
+        if text in _FALSE:
+            return False
+    raise ValueError(f"config {name!r} must be a boolean, got {value!r}")
+
 # ── Sample table ───────────────────────────────────────────────────────────────
 # Supported columns:
 #   sample | r1 | r2            → QC + assembly + viral detection + abundance
 #   sample | contigs            → viral detection only (no QC, assembly, or abundance)
 #   sample | r1 | r2 | contigs  → use provided contigs but still run QC for abundance
 
-samples_df = pd.read_csv(config.get("samples", "config/samples.tsv"), sep="\t", index_col="sample")
+samples_df = pd.read_csv(config.get("samples", "config/samples.tsv"), sep="\t", index_col="sample", dtype=str)
 SAMPLES = samples_df.index.tolist()
 
-# Samples that need fastp QC (have reads)
-READS_SAMPLES = [
-    s for s in SAMPLES
-    if "r1" in samples_df.columns and pd.notna(samples_df.loc[s].get("r1", float("nan")))
-]
+COASM = "coasm"   # assembly-unit name (and contig-ID prefix) for the co-assembly
 
-# Samples that need de-novo assembly (have reads but no provided contigs)
-ASSEMBLE_SAMPLES = [
-    s for s in READS_SAMPLES
-    if not ("contigs" in samples_df.columns and pd.notna(samples_df.loc[s].get("contigs", float("nan"))))
-]
+# Sample names become contig-ID prefixes ("{sample}__k141_N"), so "__" and
+# whitespace would make sample_of_origin ambiguous. Fail at parse time.
+_bad = [s for s in SAMPLES if "__" in s or any(c.isspace() for c in s) or not s or s == COASM]
+if _bad:
+    raise ValueError(f"Sample names must be non-empty, without whitespace or '__', and not '{COASM}': {_bad}")
+if len(set(SAMPLES)) != len(SAMPLES):
+    raise ValueError("Duplicate sample names in the sample sheet")
+
+
+def _has(sample, col):
+    return col in samples_df.columns and pd.notna(samples_df.loc[sample].get(col, float("nan")))
+
+# Samples with reads: QC'd, and used for abundance mapping
+READS_SAMPLES = [s for s in SAMPLES if _has(s, "r1")]
+
+# Samples whose contigs are supplied in the sheet (no assembly)
+PROVIDED_SAMPLES = [s for s in SAMPLES if _has(s, "contigs")]
+
+# Samples whose reads feed de-novo assembly (reads but no provided contigs)
+ASSEMBLE_SAMPLES = [s for s in READS_SAMPLES if s not in PROVIDED_SAMPLES]
+
+# ── Assembly units ─────────────────────────────────────────────────────────────
+# An "assembly unit" is one contig set that goes through viral ID. The {sample}
+# wildcard in per-unit rules (prep_contigs, genomad, ...) ranges over these.
+ASSEMBLY_MODE = config["assembly"]["mode"]
+if ASSEMBLY_MODE not in ("coassembly", "per_sample"):
+    raise ValueError(f"assembly.mode must be 'coassembly' or 'per_sample', got {ASSEMBLY_MODE!r}")
+if config["assembly"]["assembler"] not in ("megahit", "metaspades"):
+    raise ValueError(f"assembly.assembler must be 'megahit' or 'metaspades'")
+
+if ASSEMBLY_MODE == "coassembly":
+    ASSEMBLY_UNITS = [COASM] if ASSEMBLE_SAMPLES else []
+else:
+    ASSEMBLY_UNITS = list(ASSEMBLE_SAMPLES)
+
+CONTIG_SETS = ASSEMBLY_UNITS + PROVIDED_SAMPLES
+
+wildcard_constraints:
+    sample="[^/]+",
+    chunk="[0-9]+",
+    db="refseq_viral|nr",
+    unit="[^/]+",
 
 
 def get_r1(wildcards):
@@ -31,30 +91,106 @@ def get_r1(wildcards):
 def get_r2(wildcards):
     return samples_df.loc[wildcards.sample, "r2"]
 
+def clean_reads(sample, mate):
+    """QC'd (and optionally host-removed / deduplicated) reads for one sample."""
+    return f"results/samples/{sample}/qc/{sample}_R{mate}.fastq.gz"
+
+def unit_samples(unit):
+    """Read samples that feed an assembly unit."""
+    return list(ASSEMBLE_SAMPLES) if unit == COASM else [unit]
+
+def get_raw_contigs(wildcards):
+    """Assembled or user-provided contigs, before length gating / renaming."""
+    if wildcards.sample in PROVIDED_SAMPLES:
+        return str(samples_df.loc[wildcards.sample, "contigs"])
+    return f"results/samples/{wildcards.sample}/assembly/{wildcards.sample}_contigs.fa"
+
 def get_contigs_path(sample):
-    """Return the path to assembled/provided contigs for a sample."""
-    row = samples_df.loc[sample]
-    if "contigs" in samples_df.columns and pd.notna(row.get("contigs", float("nan"))):
-        return str(row["contigs"])
-    return f"results/samples/{sample}/assembly/{sample}_contigs.fa"
+    """Length-gated contigs with canonical '{sample}__<id>' headers (prep_contigs)."""
+    return f"results/samples/{sample}/contigs/{sample}_contigs.fa"
 
 def get_contigs(wildcards):
     return get_contigs_path(wildcards.sample)
 
 
+# ── Virus identification ───────────────────────────────────────────────────────
+TEST_MODE = cfg_bool(config.get("test_mode", False), "test_mode")
+SCRIPTS = workflow.basedir + "/scripts"
+
+TOOLS = {name: cfg_bool(on, f"virus_identification.tools.{name}")
+         for name, on in config["virus_identification"]["tools"].items()}
+ENABLED_TOOLS = [t for t, on in TOOLS.items() if on]
+if not ENABLED_TOOLS:
+    raise ValueError("No tools enabled under virus_identification.tools")
+
+N_CHUNKS = int(config["virus_identification"]["n_chunks"])
+if N_CHUNKS < 1:
+    raise ValueError("virus_identification.n_chunks must be >= 1")
+CHUNKS = [f"{i:03d}" for i in range(1, N_CHUNKS + 1)]
+
+# Canonical per-tool output tables consumed by the evidence step.
+TOOL_TABLE = {
+    "genomad": "results/samples/{sample}/genomad/virus_summary.tsv",
+    "virsorter2": "results/samples/{sample}/virsorter2/final-viral-score.tsv",
+    "vibrant": "results/samples/{sample}/vibrant/genome_quality.tsv",
+    "cenote_taker3": "results/samples/{sample}/cenote_taker3/virus_summary.tsv",
+    "pprmeta": "results/samples/{sample}/pprmeta/pprmeta.csv",
+    "diamond_refseq_viral": "results/samples/{sample}/diamond_refseq_viral/hits.tsv",
+    "diamond_nr": "results/samples/{sample}/diamond_nr/hits.tsv",
+}
+
+# ── vOTU clustering and abundance ──────────────────────────────────────────────
+VOTU_CFG = config["votu_clustering"]
+VOTU = cfg_bool(VOTU_CFG["enabled"], "votu_clustering.enabled")
+
+# Collation toggles, parsed once so a CLI override cannot arrive as a string.
+INCLUDE_PHAGE = cfg_bool(config["phage_filtering"]["include_phage"],
+                         "phage_filtering.include_phage")
+STRICT_CHECKS = cfg_bool(config["collation"]["strict_checks"], "collation.strict_checks")
+DOWNLOAD_NR = cfg_bool(config.get("download_nr", False), "download_nr")
+
+PRIMARY_METRIC = config["abundance"]["primary_metric"]
+# Primary first so run_coverm.py can report it without re-reading the config.
+ABUNDANCE_METRICS = [PRIMARY_METRIC] + [m for m in config["abundance"]["additional_metrics"]
+                                        if m != PRIMARY_METRIC]
+
+
+def tool_tables(tool):
+    """Paths to one tool's table for every contig set (empty if disabled)."""
+    if not TOOLS.get(tool):
+        return []
+    return expand(TOOL_TABLE[tool], sample=CONTIG_SETS)
+
+
 include: "rules/databases.smk"
-include: "rules/fastp.smk"
-include: "rules/megahit.smk"
+include: "rules/preprocess.smk"
+include: "rules/assembly.smk"
+include: "rules/prep_contigs.smk"
+include: "rules/chunks.smk"
 include: "rules/genomad.smk"
 include: "rules/virsorter2.smk"
+include: "rules/vibrant.smk"
+include: "rules/cenote_taker3.smk"
+include: "rules/diamond.smk"
 include: "rules/pprmeta.smk"
 include: "rules/evidence_score.smk"
-include: "rules/taxonomy_checkv.smk"
+include: "rules/checkv.smk"
+include: "rules/evidence_final.smk"
+include: "rules/votu.smk"
 include: "rules/coverm.smk"
 include: "rules/summary.smk"
 
 
+def all_targets():
+    targets = ["results/viral_contigs_abundance.tsv", "results/viral_contigs.fa"]
+    if VOTU:
+        targets.append("results/intermediate/votu/votu_representatives.fa")
+    if READS_SAMPLES:
+        targets += ["results/qc/multiqc_report.html",
+                    "results/intermediate/abundance/abundance_all_metrics.tsv"]
+    return targets
+
+
 rule all:
     input:
-        "results/viral_contigs_abundance.tsv",
-        "results/viral_contigs.fa",
+        all_targets(),

@@ -1,0 +1,9 @@
+name: diamond
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Unpinned on purpose: diamond 2.1.9 fails on the NCBI taxdump "domain" rank,
+  # so a current build is needed. CheckV caps diamond at <=2.1.8, which is why
+  # this cannot be merged into envs/checkv (or viral_analysis).
+  - diamond

@@ -1,8 +1,15 @@
 name: qc_assembly
 channels:
-  - bioconda
   - conda-forge
-  - defaults
+  - bioconda
 dependencies:
   - fastp=0.23.*
-  - megahit=1.2.*
+  # 1.2.8, not 1.2.9: 1.2.9 crashes with "Illegal instruction" on CPUs without
+  # AVX2 (goldberg-r710). 1.2.8 is fine on modern CPUs too.
+  - megahit=1.2.8
+  - spades=3.15.5
+  - python<3.12          # spades 3.15.5 is incompatible with python 3.12
+  - bbmap=39.*           # bbnorm, clumpify
+  - minimap2=2.*
+  - samtools=1.*
+  - seqkit=2.*

@@ -1,2 +1,0 @@
-usage: mock_genomad.py [-h] contigs output min_len
-mock_genomad.py: error: argument min_len: invalid int value: '{params.min_len}'
