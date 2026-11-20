@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vine-mirus"
+version = "0.1.0"
+description = "Viral discovery in metagenomes: Snakemake workflow, CLI and configuration TUI"
+readme = "README.md"
+requires-python = ">=3.10"
+# Snakemake is deliberately NOT a dependency: install it with conda (with
+# snakemake-executor-plugin-slurm for clusters). A pip copy here would shadow it.
+dependencies = [
+  "ruamel.yaml>=0.18,<0.19",
+  "textual>=6,<7",
+]
+
+[project.scripts]
+vine-mirus = "vine_mirus.cli:main"
+
+# The workflow stays at the repo root, where Snakemake expects it, and is mapped
+# into the package. Installed, this gives vine_mirus/{workflow,config,envs,
+# profiles,test}: the same relative layout as the repo, so the rules'
+# ../../envs/*.yaml paths and the Snakefile's ../config/config.yaml resolve in both.
+[tool.setuptools]
+packages = [
+  "vine_mirus",
+  "vine_mirus.workflow",
+  "vine_mirus.config",
+  "vine_mirus.envs",
+  "vine_mirus.profiles",
+  "vine_mirus.test",
+]
+include-package-data = false
+
+[tool.setuptools.package-dir]
+"vine_mirus" = "src/vine_mirus"
+"vine_mirus.workflow" = "workflow"
+"vine_mirus.config" = "config"
+"vine_mirus.envs" = "envs"
+"vine_mirus.profiles" = "profiles"
+"vine_mirus.test" = "test"
+
+[tool.setuptools.package-data]
+"vine_mirus" = ["tui.tcss"]
+# scripts/*.py is non-recursive on purpose: scripts/program2/ is archived, unwired code.
+"vine_mirus.workflow" = ["Snakefile", "rules/*.smk", "scripts/*.py"]
+"vine_mirus.config" = ["config.yaml"]
+"vine_mirus.envs" = ["*.yaml", "*.sh"]
+"vine_mirus.profiles" = ["*/config.yaml"]
+"vine_mirus.test" = ["generate_test_data.py"]

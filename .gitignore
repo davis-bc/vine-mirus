@@ -7,3 +7,11 @@ __pycache__/
 test/data/*.fastq.gz
 hs_err_pid*.log
 benchmarks/
+# Python packaging (pip install / pip wheel)
+build/
+dist/
+*.egg-info/
+# vine-mirus project files, if a project is run from the repo root
+/vine-mirus.yaml
+/.vine-mirus/
+/vine-mirus-test/
