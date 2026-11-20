@@ -1,7 +1,12 @@
+import os
 import pandas as pd
 from pathlib import Path
 
-configfile: "config/config.yaml"
+# Defaults resolve next to the workflow, so they are found in any --directory:
+# the repo (workflow/../config) and the installed package
+# (vine_mirus/workflow/../config) have the same layout. A --configfile (what
+# `vine-mirus run` passes) layers over these values.
+configfile: os.path.join(workflow.basedir, "..", "config", "config.yaml")
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────

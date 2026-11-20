@@ -1,0 +1,184 @@
+/* vine-mirus config — Great Lakes look.
+   Colours come from the registered theme: $lake-deep, $lake, $shoal, $foam,
+   $walleye, $sandstone, $birch, $reed, $notes-bg, $notes-ink are theme
+   variables (THEME_SPECS in tui.py), so both themes share this sheet. */
+
+Screen {
+    background: $background;
+    color: $foreground;
+    layout: vertical;
+}
+
+/* ── brand bar + buoys ─────────────────────────────────────────────────── */
+
+#topbar {
+    height: 4;
+    padding: 0 1;
+    background: $lake-deep;
+}
+
+#brand {
+    width: 1fr;
+    height: 4;
+    content-align: left middle;
+    color: $foam;
+}
+
+.buoy {
+    width: 14;
+    height: 4;
+    margin-left: 1;
+    content-align: center middle;
+    text-align: center;
+    text-style: bold;
+    color: $foam;
+    background: $lake;
+    border: round $shoal;
+}
+
+.buoy-warn {
+    color: $sandstone;
+    border: round $sandstone;
+}
+
+.buoy-test {
+    color: $walleye;
+    border: round $walleye;
+}
+
+#waves {
+    height: 1;
+    background: $lake-deep;
+    color: $shoal;
+    overflow: hidden hidden;
+}
+
+/* ── client: viewport + side panel ─────────────────────────────────────── */
+
+#client {
+    height: 1fr;
+}
+
+#viewport {
+    width: 1fr;
+    height: 1fr;
+    background: $surface;
+    border: round $shoal;
+    border-title-color: $walleye;
+    border-title-style: bold;
+}
+
+.tab-body {
+    padding: 0 1;
+    scrollbar-color: $shoal;
+    scrollbar-background: $lake-deep;
+}
+
+.section {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    background: $lake;
+    border: round $shoal;
+    border-title-color: $foam;
+    border-title-style: bold;
+}
+
+.field {
+    height: auto;
+    margin: 0;
+}
+
+.field-row {
+    height: 3;
+}
+
+.field-label {
+    width: 30;
+    height: 3;
+    content-align: left middle;
+    color: $birch;
+    text-style: bold;
+}
+
+.field-row Input {
+    width: 1fr;
+    max-width: 72;
+}
+
+.field-row Select {
+    width: 1fr;
+    max-width: 40;
+}
+
+.field-help {
+    height: auto;
+    padding-left: 30;
+    color: $reed;
+    text-style: italic;
+}
+
+#sidepanel {
+    width: 30;
+    height: 1fr;
+    padding: 0 1;
+    background: $lake-deep;
+}
+
+#side-title {
+    height: 1;
+    margin: 1 0 1 0;
+    content-align: center middle;
+    color: $walleye;
+    text-style: bold;
+}
+
+.side-tab {
+    width: 100%;
+    height: 1;
+    min-width: 0;
+    margin: 0;
+    border: none;
+    background: $lake-deep;
+    color: $birch;
+    content-align: left middle;
+    text-align: left;
+    text-style: none;
+}
+
+.side-tab:hover {
+    background: $shoal;
+}
+
+.side-tab.active {
+    background: $shoal;
+    color: $walleye;
+    text-style: bold;
+}
+
+#side-info {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+    color: $reed;
+    border: round $shoal;
+}
+
+.action {
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+/* ── field notes ───────────────────────────────────────────────────────── */
+
+#notes {
+    height: 8;
+    padding: 0 1;
+    background: $notes-bg;
+    color: $notes-ink;
+    border: round $sandstone;
+    border-title-color: $sandstone;
+    border-title-style: bold italic;
+    scrollbar-color: $shoal;
+    scrollbar-background: $notes-bg;
+}

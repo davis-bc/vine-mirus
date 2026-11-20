@@ -10,10 +10,26 @@ Study context: fish tissue and lesion samples, focused on **eukaryotic**
 viruses (RdRp / CRESS). Phage is excluded from the main outputs by default and
 written to its own table.
 
+It ships as an installable Python package (`pyproject.toml`, `src/vine_mirus/`)
+whose `vine-mirus` command (`config` / `run` / `test` / `databases`) builds and
+runs the Snakemake command for a per-project `vine-mirus.yaml`. Plain
+`snakemake --snakefile workflow/Snakefile …` still works from a clone and is
+what development and linting use.
+
 ## Running
 
-Always pass `--snakefile workflow/Snakefile`: the Snakefile is not at the repo
-root, and `configfile: "config/config.yaml"` resolves from the repo root.
+Through the package (`pip install -e .` in an env that has Snakemake):
+
+```bash
+vine-mirus test --dir <scratch>/vmt --cores 4   # synthetic reads + mocked run, 26/26
+vine-mirus config                               # TUI; creates ./vine-mirus.yaml
+vine-mirus run -n                               # extra args pass through to Snakemake
+vine-mirus databases -n
+```
+
+With plain Snakemake, always pass `--snakefile workflow/Snakefile`: the
+Snakefile is not at the repo root. Its `configfile:` is built from
+`workflow.basedir`, so the defaults load in any `--directory`.
 
 ```bash
 # Test mode (the config default). Mocks every tool, needs no databases, seconds.
@@ -153,6 +169,23 @@ High-confidence phage is excluded from the candidate FASTA before Tier B
   workstation.
 - **`(zcat … || true) | head`** in `qc_reads`: under `set -o pipefail`, `head`
   closing the pipe makes `zcat` exit 141 and kills a good run.
+- **The package keeps the repo's relative layout.** `pyproject.toml` maps
+  `workflow/`, `config/`, `envs/`, `profiles/` and `test/` into
+  `vine_mirus.*` with `package-dir`, so installed they sit beside each other
+  exactly as in the repo. That is what keeps the rules' `../../envs/*.yaml`
+  and the Snakefile's `../config/config.yaml` valid in both. Moving any of
+  these directories breaks the installed package; a new data file type needs a
+  `package-data` glob (check with `pip wheel . --no-deps` and list the wheel).
+  `project.asset_dir()` finds the trees beside the module (wheel) or at the
+  repo root (editable).
+- **A new config key needs a `schema.py` entry,** or `vine-mirus config` will
+  not show it. Removing a key means removing its entry. A quick check: every
+  leaf of a seeded `vine-mirus.yaml` should map to exactly one `FIELDS` path.
+- **`vine-mirus` runs in the project directory** (`--directory`), and every
+  `databases/…` path in the workflow is relative to it. `<project>/databases`
+  is therefore a symlink to `execution.databases_dir`, made by
+  `project.ensure_databases_link()`. Don't hard-code an absolute database
+  path into a rule.
 - **`test_mode` resolves at parse time.** Any new tool rule needs all three:
   a mock command selected by the module-level `TEST_MODE` conditional, DB
   sentinel inputs that become `[]`, and `envs/scripts.yaml` as its env in test
@@ -202,6 +235,11 @@ which a manual swap does not.
 - `workflow/scripts/program2/` is archived, unwired code — see its README.
 - Rules reference envs as `../../envs/*.yaml` and scripts via `SCRIPTS`
   (`workflow.basedir + "/scripts"`).
+- `src/vine_mirus/`: `cli.py` (subcommands), `project.py` (project file,
+  derived `.vine-mirus/config.yaml` + `.vine-mirus/profile/`, databases link,
+  sample-sheet check), `runtime.py` (builds and streams the Snakemake
+  command), `schema.py` (one entry per setting the TUI shows), `tui.py` +
+  `tui.tcss` (Textual editor; themes `superior` and `dunes`).
 - `config/` (`config.yaml`, `samples.tsv`), `profiles/{slurm,local}/`,
   `test/` (`generate_test_data.py`, gitignored `data/`). `results/`, `logs/`,
   `databases/`, `benchmarks/` are all gitignored.

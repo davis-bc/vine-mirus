@@ -203,9 +203,3 @@ virsorter2_groups:
   - NCLDV
   - RNA
   - lavidaviridae
-virsorter2_min_score: 0.5
-
-# ── DIAMOND ───────────────────────────────────────────────────────────────────
-diamond_evalue: 1e-5
-diamond_max_target_seqs: 5
-diamond_outfmt: "6 qseqid sseqid pident length evalue bitscore staxids sscinames"
