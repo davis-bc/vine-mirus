@@ -82,130 +82,104 @@ run, and cached in `databases/`. The one exception is DIAMOND's nr database
 
 ---
 
-## Requirements
+## Install
+
+vine-mirus is a Python package with a `vine-mirus` command; Snakemake runs under
+the hood. Snakemake itself comes from conda (it is deliberately not a pip
+dependency), together with the Slurm executor plugin for clusters:
+
+```bash
+mamba create -n vine-mirus -c conda-forge -c bioconda \
+    "python>=3.10" "snakemake>=9" snakemake-executor-plugin-slurm \
+    "textual>=6,<7" "ruamel.yaml>=0.18,<0.19"
+conda activate vine-mirus
+
+git clone https://github.com/davis-bc/vine-mirus.git
+pip install -e vine-mirus            # or: pip install ./vine-mirus
+vine-mirus --help
+```
 
 | Tool | Minimum version |
 |------|----------------|
 | [Conda / Mamba](https://github.com/conda-forge/miniforge) | any recent |
+| Python | ≥ 3.10 |
 | [Snakemake](https://snakemake.readthedocs.io) | ≥ 9.0 |
 | snakemake-executor-plugin-slurm | ≥ 0.4 (SLURM only) |
 
-Install a Snakemake environment with conda:
-
-```bash
-mamba create -n snakemake -c conda-forge -c bioconda \
-    snakemake snakemake-executor-plugin-slurm
-conda activate snakemake
-```
-
-**Every run needs conda enabled.** Each rule installs its tools into its own
-conda env, and that happens only when you pass `--profile profiles/local` or
-`--profile profiles/slurm` (both set `use-conda: true`) or `--use-conda`. Leave
-all of these off and the workflow refuses to start, saying what to add.
-(Without that check, the first job would die with exit 127, "command not
-found".) The first run builds the envs, which takes a while. On a cluster,
-`--conda-prefix /abs/path/to/snakemake-envs` keeps one shared env store outside
-the repo, so later clones and runs reuse it.
+Every tool runs in its own conda env, which `vine-mirus` always enables. The
+envs are built once into a shared store (`~/.local/share/vine-mirus/conda-envs`
+by default) and reused by every project, so only the first run waits for them.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/davis-bc/vine-mirus.git
-cd vine-mirus
+# 1. Mocked end-to-end run: synthetic reads, every tool mocked, no databases
+vine-mirus test                      # → ./vine-mirus-test/, 26/26 jobs
 
-# 1b. Try it in test mode first (mocked tools, no databases)
-python test/generate_test_data.py        # once: writes test/data/*.fastq.gz (gitignored)
-snakemake --snakefile workflow/Snakefile \
-          --config samples=config/samples.tsv \
-          --profile profiles/local --cores 4
+# 2. Start a real project
+mkdir /data/lesion_virome && cd /data/lesion_virome
+#    write samples.tsv here (see "Sample Sheet")
+vine-mirus config                    # opens the settings menu, creates vine-mirus.yaml
+#    Run tab: executor local or slurm, test mode OFF; Samples tab: the sheet
 
-# 2. Create your sample sheet
-cp config/samples.tsv config/my_samples.tsv
-# Edit my_samples.tsv — see "Sample Sheet" section below
+# 3. Fetch the databases (hours; see "Databases" before the first time)
+vine-mirus databases
 
-# 3. Dry-run first, always
-snakemake --snakefile workflow/Snakefile \
-          --config samples=config/my_samples.tsv test_mode=false -n
+# 4. Dry-run, then run
+vine-mirus run -n
+vine-mirus run
 
-# 4. Fetch the databases (hours; see "Databases" before the first time)
-snakemake --snakefile workflow/Snakefile databases \
-          --config samples=config/my_samples.tsv test_mode=false \
-          --cores 4 --use-conda
-
-# 5. Run
-snakemake --snakefile workflow/Snakefile \
-          --config samples=config/my_samples.tsv test_mode=false \
-          --profile profiles/local
-
-# 6. Check results
+# 5. Check results
 ls results/
 # results/evidence_table.tsv           ← the reviewer table
 # results/viral_contigs_abundance.tsv  ← summary + per-sample abundance
 # results/viral_contigs.fa             ← the screened viral sequences
 ```
 
-Step 1b is the from-scratch check. A fresh clone has no test reads
-(`test/data/` is gitignored), so generate them once. `config/samples.tsv`
-already points at them. `--profile profiles/local` turns on conda and the
-greedy scheduler, and `--cores 4` shrinks the profile's 24-core budget for a
-laptop or a cluster login node. The first run spends a few minutes building
-conda envs. After that the mocked pipeline (26 jobs) finishes in seconds. See
-[Test Mode](#test-mode) for what a passing run does and doesn't show.
+`test_mode: true` is the **default** in a new `vine-mirus.yaml`, so a real
+project must switch it off (the Mode buoy in `vine-mirus config` shows TEST in
+gold while it is on). See [Test Mode](#test-mode) for what a passing test run
+does and doesn't show.
 
-`test_mode: true` is the **default**, so any run that leaves out
-`test_mode=false` uses the mocks rather than the real tools.
+### The `vine-mirus` command
 
----
+| Command | What it does |
+|---|---|
+| `vine-mirus test [--dir D] [--cores N]` | Generates synthetic reads in `D` (default `./vine-mirus-test`) and runs the whole workflow in test mode |
+| `vine-mirus config [--theme superior\|dunes]` | Creates (if missing) and edits `./vine-mirus.yaml` in a terminal UI |
+| `vine-mirus databases [snakemake args]` | Builds every database the enabled tools need, with `test_mode` forced off |
+| `vine-mirus run [snakemake args]` | Runs the workflow; anything it does not recognise goes to Snakemake (`-n`, targets, `--forcerun …`) |
 
-## Sample Sheet
+**One project = one directory.** It holds `vine-mirus.yaml`, the sample sheet,
+and the run outputs (`results/`, `logs/`). The file is the full pipeline config
+(the packaged defaults, comments included) plus two additions: `samples:` and an
+`execution:` block (executor, cores/memory or Slurm account/partition, shared
+stores) that only the CLI reads. Each run derives `.vine-mirus/config.yaml`
+(passed as `--configfile`) and `.vine-mirus/profile/` (the Snakemake profile),
+so nested settings need no `--config` overrides.
 
-The sample sheet is a TSV with a `sample` column and one of the following input
-format options.
+**Databases are shared.** `<project>/databases` is a symlink to
+`execution.databases_dir` (default `~/.local/share/vine-mirus/databases`), so
+every project uses one store. A real `databases/` directory already in the
+project is left alone.
 
-### Option 1 — Paired-end reads (full pipeline)
-
-```tsv
-sample  r1                              r2
-sample1 /data/sample1_R1.fastq.gz       /data/sample1_R2.fastq.gz
-sample2 /data/sample2_R1.fastq.gz       /data/sample2_R2.fastq.gz
-```
-
-Runs: QC (fastp → optional host removal → optional dedup) → normalization → co-assembly (or per-sample assembly) → viral detection → taxonomy/CheckV → CoverM.
-
-In `coassembly` mode, contig IDs are prefixed `coasm__`. In `per_sample` mode they are prefixed `{sample}__`.
-
-### Option 2 — Pre-assembled contigs (viral detection only)
-
-```tsv
-sample  contigs
-sample1 /data/sample1_contigs.fa
-sample2 /data/sample2_contigs.fa
-```
-
-Skips QC and assembly. Viral detection, taxonomy, CheckV and vOTU clustering
-all run; with no reads there is nothing to map, so the abundance columns are
-absent and CoverM is stubbed out.
-
-### Option 3 — Pre-assembled contigs + reads for abundance
-
-```tsv
-sample  r1                              r2                              contigs
-sample1 /data/sample1_R1.fastq.gz       /data/sample1_R2.fastq.gz       /data/sample1.fa
-sample2 /data/sample2_R1.fastq.gz       /data/sample2_R2.fastq.gz       /data/sample2.fa
-```
-
-Uses the provided contigs for viral detection but still runs QC + CoverM, so
-abundance is measured from the reads. Contigs supplied this way are never
-re-assembled, and their IDs are still renamed to `{sample}__{id}`.
+**`vine-mirus config`** shows every setting on seven tabs (Run, Samples & reads,
+Assembly, Detection, Evidence, vOTUs & abundance, Databases), each with a
+one-line description. Buoys across the top show the sample count (checked
+against the sheet), tools enabled, test/production mode and executor. Saving
+validates types, ranges and cross-field rules (tier ordering, host references
+when host removal is on, at least one tool), writes only the changed values,
+keeps a backup in `.vine-mirus/backups/`, and logs each change under "Field
+notes". Keys: `1`–`7` tabs, `^s` save, `^r` reload, `^q`/`esc` quit.
 
 ---
 
 ## Configuration
 
-All parameters are in `config/config.yaml`. Key settings:
+`vine-mirus config` edits all of these, with descriptions. The packaged
+defaults live in `config/config.yaml`. Key settings:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -258,8 +232,10 @@ Database paths default to `databases/` and need no editing.
 ## Databases
 
 Databases are downloaded automatically the first time vine-mirus runs in
-production mode (`test_mode: false`), into `databases/` at the repository root,
-and reused by every later run.
+production mode (`test_mode: false`) and reused by every later run. Under
+`vine-mirus` they go to the shared store (`execution.databases_dir`, linked as
+`<project>/databases`); with plain Snakemake, to `databases/` in the working
+directory.
 
 | Database | Size | Tool | Download rule |
 |----------|------|------|---------------|
@@ -277,6 +253,9 @@ and reused by every later run.
 Fetch everything the enabled tools need, without running any analysis:
 
 ```bash
+vine-mirus databases          # add -n to list what would be fetched
+
+# or, from a clone with plain Snakemake:
 snakemake --snakefile workflow/Snakefile databases \
           --config samples=config/samples.tsv test_mode=false \
           --cores 4 --use-conda
@@ -348,7 +327,17 @@ anything, and keeps the conda build alongside it as `mmseqs.conda`.
 
 ---
 
-## Running the Pipeline
+## Running Snakemake directly (development)
+
+`vine-mirus run` is the normal entry point. From a clone, the workflow can also
+be driven with plain Snakemake. These commands are what the CLI builds for you;
+they are kept for development and debugging.
+
+**Every run needs conda enabled.** Pass `--profile profiles/local` or
+`--profile profiles/slurm` (both set `use-conda: true`) or `--use-conda`. Leave
+all of these off and the workflow refuses to start, saying what to add.
+(Without that check, the first job would die with exit 127, "command not
+found".) `--conda-prefix /abs/path` shares one env store across clones.
 
 ### Local execution
 
@@ -524,7 +513,10 @@ joins the tools together is actually exercised rather than bypassed. A mock run
 that passes is evidence the joins work; it says nothing about biology.
 
 ```bash
-# Generate the synthetic reads once (test/data/ is gitignored)
+# One step: synthetic reads + a mocked run in ./vine-mirus-test/
+vine-mirus test
+
+# From a clone with plain Snakemake: generate the reads once (test/data/ is gitignored)
 python test/generate_test_data.py
 
 # Explicit override to test mode
@@ -533,8 +525,8 @@ snakemake --snakefile workflow/Snakefile \
           --profile profiles/local --cores 4
 ```
 
-Set `test_mode: false` in `config/config.yaml` (or pass `--config test_mode=false`)
-for a real production run.
+For a real production run, switch Test mode off on the Run tab of
+`vine-mirus config` (with plain Snakemake: `--config test_mode=false`).
 
 ---
 
