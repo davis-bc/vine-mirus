@@ -124,6 +124,11 @@ abundance:
 # running the real tools. Used for end-to-end pipeline logic testing without databases.
 test_mode: true
 
+# Every rule runs its tool from a conda env, so the workflow refuses to start
+# unless conda is enabled (--use-conda, or a profile in profiles/ that sets it).
+# Set true only when every tool is already on PATH (e.g. a pre-built container).
+allow_no_conda: false
+
 # ── Database Paths ────────────────────────────────────────────────────────────
 # Paths to reference databases. These are downloaded automatically on first run
 # by the database setup rules in workflow/rules/databases.smk.
@@ -198,9 +203,3 @@ virsorter2_groups:
   - NCLDV
   - RNA
   - lavidaviridae
-virsorter2_min_score: 0.5
-
-# ── DIAMOND ───────────────────────────────────────────────────────────────────
-diamond_evalue: 1e-5
-diamond_max_target_seqs: 5
-diamond_outfmt: "6 qseqid sseqid pident length evalue bitscore staxids sscinames"

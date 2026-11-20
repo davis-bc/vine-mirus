@@ -7,9 +7,11 @@ Sequences include a mix of:
   - Random "metagenomic" reads (background)
   - Reads derived from a synthetic phage genome (to give viral tools something to find)
 
-Output: test/data/sample{1,2}_R{1,2}.fastq.gz
+Output: test/data/sample{1,2}_R{1,2}.fastq.gz, or --outdir DIR (used by
+`vine-mirus test`, whose installed copy of this script cannot write beside itself).
 """
 
+import argparse
 import gzip
 import random
 import string
@@ -23,7 +25,10 @@ N_READS      = 10_000
 PHAGE_READS  = 1_000   # reads from the synthetic phage in each sample
 INSERT_SIZE  = 350
 INSERT_STDEV = 50
-OUTDIR       = Path(__file__).parent / "data"
+_parser = argparse.ArgumentParser(description="Write synthetic paired-end test FASTQs.")
+_parser.add_argument("--outdir", type=Path, default=Path(__file__).parent / "data",
+                     help="output directory (default: test/data next to this script)")
+OUTDIR       = _parser.parse_args().outdir
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -108,4 +113,4 @@ for sample_idx in range(1, 3):
     print(f"  {r1_path}  ({N_READS} read pairs)")
     print(f"  {r2_path}")
 
-print("Done. Test data written to test/data/")
+print(f"Done. Test data written to {OUTDIR}/")
