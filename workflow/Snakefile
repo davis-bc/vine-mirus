@@ -30,6 +30,26 @@ def cfg_bool(value, name):
             return False
     raise ValueError(f"config {name!r} must be a boolean, got {value!r}")
 
+
+# ── Conda guard ────────────────────────────────────────────────────────────────
+# Every rule runs its tool from a conda env (test mode included: qc_reads and
+# assemble run real fastp/MEGAHIT, the rest need envs/scripts.yaml's Python).
+# Without --use-conda — or a profile that sets it — the first job dies with
+# exit 127 ("command not found") and nothing more helpful. Checked in onstart,
+# so dry-runs, --lint and Slurm-spawned jobs are unaffected.
+def _conda_enabled():
+    ds = getattr(workflow, "deployment_settings", None)
+    return ds is not None and any(m.name == "CONDA" for m in ds.deployment_method)
+
+
+onstart:
+    if not _conda_enabled() and not cfg_bool(config.get("allow_no_conda", False), "allow_no_conda"):
+        raise WorkflowError(
+            "Conda is not enabled, so every job would fail with exit 127 (command not found). "
+            "Add --profile profiles/local (or profiles/slurm), which sets use-conda, or pass "
+            "--use-conda. To run with all tools already on PATH, pass --config allow_no_conda=true."
+        )
+
 # ── Sample table ───────────────────────────────────────────────────────────────
 # Supported columns:
 #   sample | r1 | r2            → QC + assembly + viral detection + abundance

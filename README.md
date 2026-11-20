@@ -98,6 +98,15 @@ mamba create -n snakemake -c conda-forge -c bioconda \
 conda activate snakemake
 ```
 
+**Every run needs conda enabled.** Each rule installs its tools into its own
+conda env, and that happens only when you pass `--profile profiles/local` or
+`--profile profiles/slurm` (both set `use-conda: true`) or `--use-conda`. Leave
+all of these off and the workflow refuses to start, saying what to add.
+(Without that check, the first job would die with exit 127, "command not
+found".) The first run builds the envs, which takes a while. On a cluster,
+`--conda-prefix /abs/path/to/snakemake-envs` keeps one shared env store outside
+the repo, so later clones and runs reuse it.
+
 ---
 
 ## Quick Start
@@ -106,6 +115,12 @@ conda activate snakemake
 # 1. Clone the repository
 git clone https://github.com/davis-bc/vine-mirus.git
 cd vine-mirus
+
+# 1b. Try it in test mode first (mocked tools, no databases)
+python test/generate_test_data.py        # once: writes test/data/*.fastq.gz (gitignored)
+snakemake --snakefile workflow/Snakefile \
+          --config samples=config/samples.tsv \
+          --profile profiles/local --cores 4
 
 # 2. Create your sample sheet
 cp config/samples.tsv config/my_samples.tsv
@@ -132,9 +147,16 @@ ls results/
 # results/viral_contigs.fa             ← the screened viral sequences
 ```
 
-`test_mode: true` is the **default**, so leaving it out runs the mocks rather
-than the real tools. Try that first — it finishes in seconds and needs no
-databases.
+Step 1b is the from-scratch check. A fresh clone has no test reads
+(`test/data/` is gitignored), so generate them once. `config/samples.tsv`
+already points at them. `--profile profiles/local` turns on conda and the
+greedy scheduler, and `--cores 4` shrinks the profile's 24-core budget for a
+laptop or a cluster login node. The first run spends a few minutes building
+conda envs. After that the mocked pipeline (26 jobs) finishes in seconds. See
+[Test Mode](#test-mode) for what a passing run does and doesn't show.
+
+`test_mode: true` is the **default**, so any run that leaves out
+`test_mode=false` uses the mocks rather than the real tools.
 
 ---
 
@@ -203,6 +225,7 @@ All parameters are in `config/config.yaml`. Key settings:
 | `votu_clustering.ani_threshold` | `95` | % identity for same-vOTU membership |
 | `votu_clustering.target_coverage_threshold` | `85` | % of the absorbed contig the representative must cover |
 | `test_mode` | `true` | Stub all tool calls with fast mocks (no databases needed) |
+| `allow_no_conda` | `false` | Skip the startup check that conda is enabled; only for setups with every tool already on PATH |
 | `preprocessing.fastp.min_length` | `50` | fastp minimum read length |
 | `preprocessing.fastp.qualified_quality` | `15` | fastp per-base quality threshold |
 | `preprocessing.host_removal.enabled` | `false` | Remove host reads (minimap2); set `reference_genomes`. Recommended for tissue samples |
@@ -341,9 +364,10 @@ snakemake --snakefile workflow/Snakefile \
           --profile profiles/local
 
 # Test mode (mocks all tools — no databases, finishes in minutes)
+python test/generate_test_data.py        # once, on a fresh clone
 snakemake --snakefile workflow/Snakefile \
-          --config samples=config/my_samples.tsv \
-          --cores 4 --use-conda --scheduler greedy
+          --config samples=config/samples.tsv \
+          --profile profiles/local --cores 4
 ```
 
 Boolean config values given on the command line are parsed explicitly, so
@@ -500,10 +524,13 @@ joins the tools together is actually exercised rather than bypassed. A mock run
 that passes is evidence the joins work; it says nothing about biology.
 
 ```bash
+# Generate the synthetic reads once (test/data/ is gitignored)
+python test/generate_test_data.py
+
 # Explicit override to test mode
 snakemake --snakefile workflow/Snakefile \
           --config samples=config/samples.tsv test_mode=true \
-          --cores 4 --use-conda --scheduler greedy
+          --profile profiles/local --cores 4
 ```
 
 Set `test_mode: false` in `config/config.yaml` (or pass `--config test_mode=false`)
